@@ -136,15 +136,37 @@ def names(path, mode):
     return {s.strip() for s in subprocess.check_output(
         ['xcrun', 'nm', '-g', mode, '-j', path], text=True).splitlines() if s.startswith('_')}
 
+def weak_imports(path):
+    data = path.read_bytes()
+    cursor = 32
+    result = set()
+    for _ in range(struct.unpack_from('<I', data, 16)[0]):
+        kind, size = struct.unpack_from('<II', data, cursor)
+        if kind == 2:
+            symbols, count, strings, string_bytes = struct.unpack_from('<4I', data, cursor + 8)
+            for index in range(count):
+                offset, symbol_type, _, description, _ = struct.unpack_from('<IBBHQ', data, symbols + index * 16)
+                if symbol_type == 1 and description & 0x40:  # N_UNDF|N_EXT, N_WEAK_REF
+                    name = data[strings + offset:strings + string_bytes].split(b'\0', 1)[0].decode()
+                    result.add(name)
+        cursor += size
+    return result
+
 defined = set().union(*(names(p, '-U') for p in objects))
 imports = set().union(*(names(p, '-u') for p in objects)) - defined
 kernel = kernel_names(ROOT, object_directory=OBJ)
 collisions = sorted(defined & kernel)
-missing = sorted(imports - kernel - {'___dso_handle'})
+# NativeUfs's passive progress observer is explicitly optional. Permit only
+# that known hook when every reference carries Mach-O N_WEAK_REF; a strong
+# reference or an unavailable storage/security API still fails the audit.
+weak = set().union(*(weak_imports(p) for p in objects))
+strong = set().union(*(names(p, '-u') - weak_imports(p) for p in objects))
+optional = (weak - strong - defined - kernel) & {'_boot_progress_poll'}
+missing = sorted(imports - kernel - {'___dso_handle'} - optional)
 report = {'source_revision': REVISION, 'objects': len(objects),
           'ordinary_arm64_ios26_audited': True, 'native_kernel_backend_only': True,
           'sm8350_stream_id': 0xe0, 'kernel_collisions': collisions,
-          'missing_kernel_imports': missing, 'hardware_qualified': False, 'owner_policy_from_ufs': verified,
+          'missing_kernel_imports': missing, 'optional_weak_observers': sorted(optional), 'hardware_qualified': False, 'owner_policy_from_ufs': verified,
           'native_driver_sha256': hashlib.sha256(patched.read_bytes()).hexdigest()}
 (OUT / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
 if collisions or missing:
