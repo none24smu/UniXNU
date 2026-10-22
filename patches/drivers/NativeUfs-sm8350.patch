@@ -36,7 +36,7 @@ index 5d11663..335b23f 100644
  #define GCC_UFS_BRANCH_ENABLE_BIT     0x1U
  
 diff --git a/NativeUfs.cpp b/NativeUfs.cpp
-index bdf3df5..8d08e0e 100644
+index bdf3df5..98f2cf3 100644
 --- a/NativeUfs.cpp
 +++ b/NativeUfs.cpp
 @@ -6,6 +6,10 @@
@@ -50,7 +50,20 @@ index bdf3df5..8d08e0e 100644
  #include <vm/vm_map.h>
  #include <sys/param.h>
  #if defined(NATIVE_VERIFIED_BLOCK) && NATIVE_VERIFIED_BLOCK
-@@ -125,10 +129,10 @@ IOService *NativeUfs::probe (IOService *provider, SInt32 *score)
+@@ -41,7 +45,12 @@ static void rootDiagnosticFailure (const char *reason);
+ extern "C" {
+ // Optional passive observer; absent in ordinary builds. It may run while a
+ // window lock is held, so its contract forbids blocking or transport access.
++#ifndef NATIVE_UFS_PROGRESS_OBSERVER
++#define NATIVE_UFS_PROGRESS_OBSERVER 1
++#endif
++#if NATIVE_UFS_PROGRESS_OBSERVER
+ void boot_progress_poll (void) __attribute__((weak));
++#endif
+ volatile uint32_t native_ufs_probe_calls = 0;
+ volatile uint32_t native_ufs_matched = 0;
+ volatile uint32_t native_ufs_probe_requested = 0;
+@@ -125,10 +134,10 @@ IOService *NativeUfs::probe (IOService *provider, SInt32 *score)
    bool match = false;
    if (data) {
      const char *text = static_cast<const char *> (data->getBytesNoCopy ());
@@ -63,7 +76,7 @@ index bdf3df5..8d08e0e 100644
    }
    if (!match) {
      return nullptr;
-@@ -170,8 +174,12 @@ void NativeUfs::inspect (void)
+@@ -170,8 +179,12 @@ void NativeUfs::inspect (void)
  {
    OSSharedPtr<IOMemoryMap> gccMap, memPhyMap, hcMap;
    uintptr_t gcc = mapPhys (GCC_BASE + 0x77000, 0x1000, gccMap);
@@ -78,7 +91,7 @@ index bdf3df5..8d08e0e 100644
      panic ("NATIVE_UFS inspect: GCC map failed gcc=%p memphy=%p", (void *) gcc, (void *) memPhy);
    }
    uint32_t gdsc = read32 (gcc, GCC_UFS_PHY_GDSCR - 0x77000);
-@@ -181,7 +189,7 @@ void NativeUfs::inspect (void)
+@@ -181,7 +194,7 @@ void NativeUfs::inspect (void)
    uint32_t txs = read32 (gcc, GCC_UFS_PHY_TX_SYMBOL0_ENABLE - 0x77000);
    uint32_t rxs = read32 (gcc, GCC_UFS_PHY_RX_SYMBOL0_ENABLE - 0x77000);
    uint32_t aux = read32 (gcc, GCC_UFS_PHY_PHY_AUX_ENABLE - 0x77000);
@@ -87,7 +100,7 @@ index bdf3df5..8d08e0e 100644
    // GDSCR bit31 PWR_ON; CBCR bit31 CLK_OFF.
    bool powered = (gdsc & 0x80000000U) != 0;
    // Hardware 2026-10-17: AXI running, AHB enabled but CLK_OFF (bit31). With bit1 (HW gating)
-@@ -285,7 +293,7 @@ static void smmuBypassStream (uint16_t stream, OSSharedPtr<IOMemoryMap> &keep, u
+@@ -285,7 +298,7 @@ static void smmuBypassStream (uint16_t stream, OSSharedPtr<IOMemoryMap> &keep, u
    if (!smmu) {
      panic ("NATIVE_UFS smmu: map failed");
    }
@@ -96,7 +109,7 @@ index bdf3df5..8d08e0e 100644
    gRootDiagnostic.smmuId1 = read32 (smmu, 0x24);
    gRootDiagnostic.smmuId2 = read32 (smmu, 0x28);
    gRootDiagnostic.smmuSlot = plan.slot;
-@@ -367,7 +375,7 @@ void NativeUfs::adoptAndRead (unsigned level)
+@@ -367,7 +380,7 @@ void NativeUfs::adoptAndRead (unsigned level)
    unsigned stopLoops = 10000;
    while ((read32 (hc, 0x60) & 1) && stopLoops--) IODelay (10);
    if (read32 (hc, 0x60) & 1) panic ("NATIVE_UFS adopt: request list did not stop");
@@ -105,7 +118,7 @@ index bdf3df5..8d08e0e 100644
    write32 (hc, 0x50, static_cast<uint32_t> (phys));
    write32 (hc, 0x54, static_cast<uint32_t> (phys >> 32));
    write32 (hc, 0x20, 0xffffffffU);  // clear stale status
-@@ -735,7 +743,7 @@ void NativeUfs::inspectSmmu (void)
+@@ -735,7 +748,7 @@ void NativeUfs::inspectSmmu (void)
        valid++;
        typeCount[(s2cr >> 16) & 3]++;
        uint32_t mask = (smr >> 16) & 0x7fff;
@@ -114,7 +127,7 @@ index bdf3df5..8d08e0e 100644
          match = index;
          matchSmr = smr;
          matchS2cr = s2cr;
-@@ -745,9 +753,9 @@ void NativeUfs::inspectSmmu (void)
+@@ -745,9 +758,9 @@ void NativeUfs::inspectSmmu (void)
    panic ("NATIVE_UFS smmu\n"
           "scr0=%08x idr0=%08x idr1=%08x gfsr=%08x\n"
           "nsmr=%u valid=%u types t0=%u t1=%u t2=%u\n"
@@ -126,7 +139,7 @@ index bdf3df5..8d08e0e 100644
  }
  
  // Read-only context-bank survey (native-ufs-probe=8): CBAR/CBA2R in gr1 and SCTLR/TTBR0 in the
-@@ -927,7 +935,7 @@ static bool hostBringUp (const char **why)
+@@ -927,7 +940,7 @@ static bool hostBringUp (const char **why)
    uint32_t report[3] = { 0, 0, 0 };
    gRootDiagnostic.stage = "SMMU and request list";
    if (!hostStopQueue (why)) return false;
@@ -135,7 +148,7 @@ index bdf3df5..8d08e0e 100644
    gHost.smmu = gHost.smmuMap->getVirtualAddress ();
    uint32_t idr1 = read32 (gHost.smmu, 0x24);
    gHost.cb = gHost.smmu + ((1U << (((idr1 >> 28) & 7) + 1)) + (report[0] >> 16)) * 4096;
-@@ -1215,6 +1223,7 @@ class NativeUfsBlock : public IOBlockStorageDevice {
+@@ -1215,6 +1228,7 @@ class NativeUfsBlock : public IOBlockStorageDevice {
    struct vr_view verified = {};
    vm_offset_t verifiedStorage = 0;
    vm_size_t verifiedStorageBytes = 0;
@@ -143,7 +156,7 @@ index bdf3df5..8d08e0e 100644
    bool configureVerification ();
  #endif
  public:
-@@ -1223,7 +1232,8 @@ public:
+@@ -1223,7 +1237,8 @@ public:
    bool signedVolumeUuid (char out[37]) const;
  #endif
    const char *windowLabel () const { return label; }
@@ -153,7 +166,7 @@ index bdf3df5..8d08e0e 100644
    bool start (IOService *provider) override;
    void free () override;
    IOReturn doEjectMedia () override { return kIOReturnUnsupported; }
-@@ -1283,7 +1293,8 @@ static void rootDiagnosticFailure (const char *reason)
+@@ -1283,7 +1298,8 @@ static void rootDiagnosticFailure (const char *reason)
    panic ("%s", gRootDiagnosticText);
  }
  
@@ -163,7 +176,7 @@ index bdf3df5..8d08e0e 100644
  {
    if (!name || !ufsWindowGeometry (absoluteOffset, size)) {
      return false;
-@@ -1300,28 +1311,45 @@ bool NativeUfsBlock::configure (const char *name, uint64_t absoluteOffset, uint6
+@@ -1300,28 +1316,45 @@ bool NativeUfsBlock::configure (const char *name, uint64_t absoluteOffset, uint6
  #if defined(NATIVE_VERIFIED_BLOCK) && NATIVE_VERIFIED_BLOCK
    // Reads are served only after each 4096-byte integrity block verifies against the owner-signed
    // policy; without a matching policy the device is never published.
@@ -212,7 +225,7 @@ index bdf3df5..8d08e0e 100644
    if (!verified_root_policy_count || verified_root_policy_count > 16) {
      gRootDiagnostic.stage = "policy count invalid";
      return false;
-@@ -1350,6 +1378,7 @@ bool NativeUfsBlock::configureVerification ()
+@@ -1350,6 +1383,7 @@ bool NativeUfsBlock::configureVerification ()
      gRootDiagnostic.stage = "no capacity-matching policy";
      return false;
    }
@@ -220,7 +233,7 @@ index bdf3df5..8d08e0e 100644
    gRootDiagnostic.stage = "policy storage";
    vm_size_t tableBytes = round_page (static_cast<vm_size_t> (manifestBytes));
    if (tableBytes < manifestBytes || tableBytes > UINT64_MAX - 4096) {
-@@ -1362,12 +1391,25 @@ bool NativeUfsBlock::configureVerification ()
+@@ -1362,12 +1396,25 @@ bool NativeUfsBlock::configureVerification ()
                    static_cast<kma_flags_t> (KMA_KOBJECT | KMA_DATA), VM_KERN_MEMORY_SECURITY) != KERN_SUCCESS) {
      return false;
    }
@@ -248,7 +261,17 @@ index bdf3df5..8d08e0e 100644
      return false;
    }
    gRootDiagnostic.stage = "owner signature and hash table";
-@@ -1903,7 +1945,10 @@ bool NativeUfs::startRoot (IOService *provider)
+@@ -1486,7 +1533,9 @@ IOReturn NativeUfsBlock::doAsyncReadWrite (IOMemoryDescriptor *buffer, UInt64 bl
+         return kIOReturnNotPrivileged;
+       }
+       __atomic_fetch_add (&native_ufs_verified_blocks, 1, __ATOMIC_RELAXED);
++#if NATIVE_UFS_PROGRESS_OBSERVER
+       if (boot_progress_poll) boot_progress_poll ();
++#endif
+ #else
+       (void) index; (void) data; (void) length;
+ #endif
+@@ -1903,7 +1952,10 @@ bool NativeUfs::startRoot (IOService *provider)
        gPendingUuid[index][0] = 0;
        uint64_t absolute = layout->userdataFirst * 4096ULL + layout->window[index].offset;
        if (!device || !device->init (static_cast<OSDictionary *> (nullptr)) ||
