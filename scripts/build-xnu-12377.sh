@@ -130,6 +130,54 @@ PY
 fi
 
 EXTRA_CFLAGS=${XNU_EXTRA_CFLAGS:--Wno-reserved-identifier -Wno-pre-c11-compat -Wno-missing-designated-field-initializers -Wno-suggest-override -Wno-unnecessary-virtual-specifier -Wno-suggest-destructor-override -Wno-ms-bitfield-padding}
+EXTRA_MAKE_ARGS=()
+OBJ=$OUT/ios-obj/DEVELOPMENT_ARM64_BCM2837
+
+# flag VARIABLE: the 0/1 value of a CONFIG_XNU_ option (0 when unset).
+flag() {
+  local value=${!1:-0}
+  if [ "$value" != 0 ] && [ "$value" != 1 ]; then
+    echo "$1 must be 0 or 1" >&2
+    exit 1
+  fi
+  echo "$value"
+}
+# rebuild_on_change NAME VALUE OBJECT...: make does not track per-object flags, so drop the objects when VALUE changes.
+rebuild_on_change() {
+  local stamp=$OBJ/.$1 value=$2
+  shift 2
+  mkdir -p "$OBJ"
+  if [ "$(cat "$stamp" 2>/dev/null || echo 0)" != "$value" ]; then
+    for object in "$@"; do
+      rm -f "$OBJ/$object"
+    done
+    printf '%s\n' "$value" > "$stamp"
+  fi
+}
+
+# BCM2837 start.s routes the core timers through the Raspberry Pi local interrupt controller (physical 0x40000040)
+# before the MMU is on; other boards need it off. In the xnu-10063 build this also required ArmCpu, the GIC timer
+# provider, which is not ported to xnu-12377 yet: until it is, the kernel has no timer interrupt either way.
+NATIVE_ARCH_TIMER=$(flag XNU_NATIVE_ARCH_TIMER)
+EXTRA_MAKE_ARGS+=("start.o_SFLAGS_ADD=-DXNU_NATIVE_ARCH_TIMER=$NATIVE_ARCH_TIMER")
+rebuild_on_change native-arch-timer-mode "$NATIVE_ARCH_TIMER" osfmk/DEVELOPMENT/start.o
+# PAN on ARMv8.1+ cores; the files that read the PAN register by name need ARMv8.1 code generation.
+NATIVE_PAN=$(flag XNU_NATIVE_PAN)
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_PAN=$NATIVE_PAN"
+for object in copyio.o pcb.o platform_tests.o; do
+  if [ "$NATIVE_PAN" = 1 ]; then
+    EXTRA_MAKE_ARGS+=("${object}_CFLAGS_ADD=-march=armv8.1-a")
+  fi
+done
+# Panic log in the device tree's pram region instead of the Raspberry Pi address PLATFORM_PANIC_LOG_PADDR.
+DT_PANIC_REGION=$(flag XNU_DT_PANIC_REGION)
+EXTRA_MAKE_ARGS+=("pe_init.o_CFLAGS_ADD=-DXNU_DT_PANIC_REGION=$DT_PANIC_REGION")
+rebuild_on_change dt-panic-region-mode "$DT_PANIC_REGION" pexpert/DEVELOPMENT/pe_init.o
+# trust_cache_init() at boot, which BCM2837 skips.
+TRUST_CACHE_MODE=$(flag XNU_TRUST_CACHE_RUNTIME)
+EXTRA_MAKE_ARGS+=("startup.o_CFLAGS_ADD=-DXNU_NATIVE_TRUST_CACHE=$TRUST_CACHE_MODE")
+rebuild_on_change trust-cache-mode "$TRUST_CACHE_MODE" osfmk/DEVELOPMENT/startup.o
+
 export KERNEL_SDKROOT=$FAKEROOT
 make -C "$WORK" "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" KDKROOT="$KDKROOT" \
   ARCH_CONFIGS=ARM64 MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \
@@ -139,6 +187,6 @@ make -C "$WORK" "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" 
   DEPLOYMENT_LINKER_FLAGS="-Wl,-ios_version_min,$IOS_MIN" \
   RC_DARWIN_KERNEL_VERSION="$XNU_DARWIN" RC_ProjectSourceVersion="$XNU_VERSION" \
   BUILD_LTO=0 BOUND_CHECKS=0 BUILD_WERROR="${XNU_BUILD_WERROR:-0}" MAKEJOBS=-j"$JOBS" \
-  CFLAGS_EXTRA="$EXTRA_CFLAGS" \
+  CFLAGS_EXTRA="$EXTRA_CFLAGS" "${EXTRA_MAKE_ARGS[@]}" \
   OBJROOT="$OUT/ios-obj" SYMROOT="$OUT/ios-sym" DSTROOT="$OUT/ios-dst"
 find "$OUT/ios-sym" "$OUT/ios-obj/DEVELOPMENT_ARM64_BCM2837" -maxdepth 1 \( -name 'kernel.*' -o -name 'mach.*' \) -type f -exec ls -l {} +
