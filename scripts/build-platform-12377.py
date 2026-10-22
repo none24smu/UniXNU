@@ -8,13 +8,14 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('component', choices=['ArmDTPlatform', 'ArmCpu'])
+parser.add_argument('component', choices=['ArmDTPlatform', 'ArmCpu', 'NativeDwc3Console'])
 args = parser.parse_args()
 obj = ROOT / 'build/xnu-12377.121.6/ios-obj/DEVELOPMENT_ARM64_BCM2837'
-record = json.loads((obj / 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json').read_text().strip().rstrip(','))
+recipe = 'pexpert/DEVELOPMENT/pe_serial.o.json' if args.component == 'NativeDwc3Console' else 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'
+record = json.loads((obj / recipe).read_text().strip().rstrip(','))
 out = ROOT / 'build/platform-12377' / args.component
 out.mkdir(parents=True, exist_ok=True)
-source = ROOT / 'drivers' / args.component / (args.component + '.cpp')
+source = ROOT / 'scripts/native-dwc3-console.c' if args.component == 'NativeDwc3Console' else ROOT / 'drivers' / args.component / (args.component + '.cpp')
 destination = out / (args.component + '.o')
 command = []
 arguments = record['arguments']

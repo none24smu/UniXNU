@@ -197,6 +197,9 @@ if [ "$ARMCPU" = 1 ] && { [ "$ARM_DT_PLATFORM" != 1 ] || [ "$NATIVE_ARCH_TIMER" 
 fi
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_ARM_DT_PLATFORM=$ARM_DT_PLATFORM -DXNU_ARMCPU=$ARMCPU"
 rebuild_on_change platform-personalities "$ARM_DT_PLATFORM:$ARMCPU" iokit/DEVELOPMENT/KernelConfigTables.cpo
+NATIVE_DWC3_CONSOLE=$(flag XNU_NATIVE_DWC3_CONSOLE)
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_DWC3_CONSOLE=$NATIVE_DWC3_CONSOLE"
+rebuild_on_change native-dwc3-console "$NATIVE_DWC3_CONSOLE" pexpert/DEVELOPMENT/pe_serial.o osfmk/DEVELOPMENT/rtclock.o
 
 export KERNEL_SDKROOT=$FAKEROOT
 # The search paths xnu adds for SDK and KDK content this build does not have (iBoot and AppleFeatures headers,
@@ -222,11 +225,12 @@ make ${MAKE_KEEP_GOING[@]+"${MAKE_KEEP_GOING[@]}"} -C "$WORK" "${XNU_BUILD_TARGE
   CFLAGS_EXTRA="$EXTRA_CFLAGS" "${EXTRA_MAKE_ARGS[@]}" "$@" \
   OBJROOT="$OUT/ios-obj" SYMROOT="$OUT/ios-sym" DSTROOT="$OUT/ios-dst"
 }
-if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ]; then
+if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] || [ "$NATIVE_DWC3_CONSOLE" = 1 ]; then
   # First produce the unlinked objects/filelist for collision discovery.
   # Bootstrap references are enabled only after the provider archive exists.
   rm -f "$OBJ/osfmk/DEVELOPMENT/prng_random.o" "$OBJ/pexpert/DEVELOPMENT/pe_init.o"
-  build_kernel CFLAGS_EXTRA="$EXTRA_CFLAGS -UXNU_SOURCE_CORECRYPTO14 -UXNU_ARM_DT_PLATFORM -UXNU_ARMCPU"
+  rm -f "$OBJ/pexpert/DEVELOPMENT/pe_serial.o" "$OBJ/osfmk/DEVELOPMENT/rtclock.o"
+  build_kernel CFLAGS_EXTRA="$EXTRA_CFLAGS -UXNU_SOURCE_CORECRYPTO14 -UXNU_ARM_DT_PLATFORM -UXNU_ARMCPU -UXNU_NATIVE_DWC3_CONSOLE"
   ARCHIVE_FLAGS="-L$FAKEROOT/usr/local/lib/kernel -lfirehose_kernel"
   ARCHIVE_DEPENDENCIES=""
   if [ "$SOURCE_CRYPTO" = 1 ]; then
@@ -236,9 +240,10 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ]; 
     ARCHIVE_FLAGS="$ARCHIVE_FLAGS $CRYPTO_ARCHIVE"
     ARCHIVE_DEPENDENCIES="$CRYPTO_ARCHIVE"
   fi
-  for component in ArmDTPlatform ArmCpu; do
+  for component in ArmDTPlatform ArmCpu NativeDwc3Console; do
     if { [ "$component" = ArmDTPlatform ] && [ "$ARM_DT_PLATFORM" = 1 ]; } || \
-       { [ "$component" = ArmCpu ] && [ "$ARMCPU" = 1 ]; }; then
+       { [ "$component" = ArmCpu ] && [ "$ARMCPU" = 1 ]; } || \
+       { [ "$component" = NativeDwc3Console ] && [ "$NATIVE_DWC3_CONSOLE" = 1 ]; }; then
       python3 scripts/build-platform-12377.py "$component"
       archive=$ROOT/build/platform-12377/$component/lib$component.a
       ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-force_load,$archive"
@@ -247,6 +252,7 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ]; 
   done
   rm -f "$OBJ/osfmk/DEVELOPMENT/prng_random.o" "$OBJ/pexpert/DEVELOPMENT/pe_init.o"
   rm -f "$OBJ/iokit/DEVELOPMENT/KernelConfigTables.cpo"
+  rm -f "$OBJ/pexpert/DEVELOPMENT/pe_serial.o" "$OBJ/osfmk/DEVELOPMENT/rtclock.o"
   build_kernel "LD_KERNEL_ARCHIVES=$ARCHIVE_FLAGS" "XNU_EXTERNAL_KERNEL_ARCHIVES=$ARCHIVE_DEPENDENCIES"
   if [ "$SOURCE_CRYPTO" = 1 ]; then
     python3 scripts/seal-source-crypto-kernel.py --static-if-defaults "$OBJ/mach.development.bcm2837.unstripped.noctf"
