@@ -127,9 +127,15 @@ static bool cc12377_hmac_verify(crypto_digest_alg_t alg, const void *key, size_t
     return equal;
 }
 
+static void cc12377_ccdigest_final(const struct ccdigest_info *di, ccdigest_ctx_t ctx,
+                                  void *digest)
+{
+    ccdigest_final(di, ctx, digest);
+}
+
 static void cc12377_complete_kpis(struct crypto_functions *funcs)
 {
-    funcs->ccdigest_final_fn = ccdigest_final;
+    funcs->ccdigest_final_fn = cc12377_ccdigest_final;
     funcs->digest_ctx_size_fn = cc12377_digest_size;
     funcs->digest_init_fn = cc12377_digest_init;
     funcs->digest_update_fn = cc12377_digest_update;
