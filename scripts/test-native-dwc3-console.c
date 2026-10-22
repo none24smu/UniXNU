@@ -5,7 +5,7 @@
 #include <assert.h>
 #include <stdio.h>
 
-static uint32_t fake_registers[0x10000 / 4];
+static uint32_t fake_registers[0x100000 / 4];
 static uint64_t test_time;
 static unsigned resets, stalls;
 static bool command_timeout;
@@ -59,8 +59,14 @@ static void finish_no_data(void)
 int main(void)
 {
     registers=1; frequency=1000; dma_physical=0x100000;
+    qcom_usb0=true;
+    fake_registers[0xf8810/4]=0x42;
     fake_registers[GSNPSID/4]=0x5533330a;
-    assert(!unixnu_dwc3_init() && active && unixnu_dwc3_phase==4); // No simulated host yet; bounded wait.
+    assert(unixnu_dwc3_init() && active && !configured && unixnu_dwc3_phase==4); // No simulated host yet; bounded wait.
+    assert(fake_registers[0xf8810/4]==(0x42 | (1u<<20) | (1u<<28)));
+    uint64_t initialized_at=test_time;
+    unixnu_dwc3_put('E');
+    assert(unixnu_dwc3_init() && test_time==initialized_at && ring_head==1); // No second reset or enumeration wait.
     assert(sizeof(configuration_descriptor)==67);
     event(1u | (1u << 8)); event(1u | (2u << 8));
     setup(0x80,6,0x100,0,65535); assert(transfer_length[1]==18 && dma.control[0]==18); finish_control_in();
@@ -68,6 +74,8 @@ int main(void)
     setup(0x80,6,0x302,0x409,255); assert(transfer_length[1]==26 && dma.control[2]=='z'); finish_control_in();
     setup(0,5,17,0,0); assert(((read_reg(DCFG)>>3)&127)==17); finish_no_data();
     setup(0,9,1,0,0); assert(configured && transfer_active[2]); finish_no_data();
+    assert(transfer_active[3] && dma.transmit[0]=='E'); complete(3,0);
+    ring_head=ring_tail=0; // Early text was delivered; subsequent completion cases start empty.
     setup(0xa1,0x21,0,0,7); assert(transfer_length[1]==7 && dma.control[6]==8); finish_control_in();
     setup(0x21,0x20,0,0,7); memcpy(dma.control,(uint8_t[]){0,0x96,0,0,0,0,8},7);
     complete(0,57); event((1u<<1)|(3u<<6)|(2u<<12)); complete(1,0); assert(line_coding[1]==0x96);

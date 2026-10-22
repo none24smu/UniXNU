@@ -45,7 +45,8 @@ struct dma_area {
 static struct dma_area dma;
 static uintptr_t registers;
 static uint64_t dma_physical, frequency;
-static bool active, configured, busy, direction_in, three_stage, status_started;
+static bool active, configured, busy, direction_in, three_stage, status_started, initialization_attempted;
+static bool qcom_usb0;
 static unsigned ep0_state, event_position, packet_size = 512, command_position;
 static uint32_t transfer_length[EP_COUNT], resources[EP_COUNT];
 static bool transfer_active[EP_COUNT];
@@ -54,6 +55,7 @@ static uint64_t ring_head, ring_tail, transfer_end, reset_deadline;
 volatile uint32_t unixnu_dwc3_phase, unixnu_dwc3_error, unixnu_dwc3_last_event;
 volatile uint32_t unixnu_dwc3_last_command, unixnu_dwc3_last_command_status;
 volatile uint64_t unixnu_dwc3_transmitted, unixnu_dwc3_dropped;
+volatile uint32_t unixnu_dwc3_qcom_session_before, unixnu_dwc3_qcom_session_after;
 
 #ifdef UNIXNU_DWC3_HOST_TEST
 static uint64_t ticks(void);
@@ -321,17 +323,29 @@ uint8_t unixnu_dwc3_receive(void) { return 0; }
 
 bool unixnu_dwc3_init(void)
 {
+    // serial_init is called again by PE_init_kprintf. Preserve live transfers,
+    // buffered output and an enumeration in progress instead of resetting USB.
+    if (initialization_attempted) return active;
 #ifndef UNIXNU_DWC3_HOST_TEST
     DTEntry chosen; const void *property; unsigned bytes;
     if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
         SecureDTGetProperty(chosen, "unixnu,dwc3-console", &property, &bytes) != kSuccess || bytes != 16) return false;
     uint64_t window[2]; memcpy(window, property, sizeof(window));
     if (!window[0] || window[0] % 4096 || window[1] < 0xd000 || window[1] > 0x100000) return false;
+    if (SecureDTGetProperty(chosen, "unixnu,qcom-usb0", &property, &bytes) == kSuccess) {
+        uint32_t enabled;
+        if (bytes != sizeof(enabled)) return false;
+        memcpy(&enabled, property, sizeof(enabled));
+        if (enabled != 1 || window[0] != 0x0a600000 || window[1] < 0xf8814) return false;
+        qcom_usb0 = true;
+    }
+    initialization_attempted = true;
     registers = ml_io_map((vm_offset_t)window[0], (vm_size_t)window[1]);
     if (!registers) return false;
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
     dma_physical = ml_static_vtop((vm_offset_t)&dma);
 #endif
+    initialization_attempted = true;
     if (!frequency || !dma_physical) return false;
     unixnu_dwc3_phase = 1;
     uint32_t id = read_reg(GSNPSID) >> 16;
@@ -340,9 +354,18 @@ bool unixnu_dwc3_init(void)
     uint64_t deadline = ticks() + frequency / 10;
     while (read_reg(DCTL) & (1u << 30)) if (ticks() >= deadline) { unixnu_dwc3_error = 6; return false; }
     unixnu_dwc3_phase = 2;
-    write_reg(GCTL, (read_reg(GCTL) & ~((3u << 12) | (3u << 4) | (1u << 1) | (1u << 3))) | (2u << 12));
+    write_reg(GCTL, (read_reg(GCTL) & ~((3u << 12) | (3u << 4) | (1u << 1) | (1u << 3))) |
+              (2u << 12) | (qcom_usb0 ? 1u : 0)); // lahaina DT: disable-clk-gating
     // Keep firmware's UTMI width and PHY tuning; clear USB2 PHY suspend/sleep gating.
     write_reg(0xc200, read_reg(0xc200) & ~((1u << 6) | (1u << 8)));
+    if (qcom_usb0) {
+        // SM8350 QSCRATCH HS_PHY_CTRL, as in dwc3-qcom's VBUS override.
+        // USB is attached to a host; select and assert UTMI session validity.
+        // This does not initialize external PHY supplies or clocks.
+        unixnu_dwc3_qcom_session_before = read_reg(0xf8810);
+        write_reg(0xf8810, unixnu_dwc3_qcom_session_before | (1u << 20) | (1u << 28));
+        unixnu_dwc3_qcom_session_after = read_reg(0xf8810);
+    }
     memset(&dma, 0, sizeof(dma)); cache_sync(&dma, sizeof(dma));
     write_reg(GEVNTADRLO, (uint32_t)dma_physical); write_reg(GEVNTADRHI, (uint32_t)(dma_physical >> 32));
     write_reg(GEVNTSIZ, EVENT_BYTES | (1u << 31)); write_reg(GEVNTCOUNT, read_reg(GEVNTCOUNT) & 0xfffc);
@@ -365,5 +388,7 @@ bool unixnu_dwc3_init(void)
         uint64_t flush = ticks() + frequency / 2;
         while (ring_head != ring_tail && ticks() < flush) unixnu_dwc3_poll();
     }
-    return configured;
+    // Register the byte sink even if Linux enumerates later. Early boot text
+    // stays in the ring and polling continues from output and timer callbacks.
+    return active;
 }
