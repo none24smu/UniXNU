@@ -179,6 +179,12 @@ EXTRA_MAKE_ARGS+=("startup.o_CFLAGS_ADD=-DXNU_NATIVE_TRUST_CACHE=$TRUST_CACHE_MO
 rebuild_on_change trust-cache-mode "$TRUST_CACHE_MODE" osfmk/DEVELOPMENT/startup.o
 
 export KERNEL_SDKROOT=$FAKEROOT
+# The search paths xnu adds for SDK and KDK content this build does not have (iBoot and AppleFeatures headers,
+# platform headers and libraries). Empty, they add nothing; missing, every compile warns -Wmissing-include-dirs.
+mkdir -p "$FAKEROOT/usr/local/include/iBoot" \
+  "$FAKEROOT/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders/AppleFeatures" \
+  "$KDKROOT/System/Library/Frameworks/Kernel.framework/Versions/A/Headers/platform" \
+  "$FAKEROOT/usr/local/lib/kernel/platform" "$KDKROOT/usr/local/lib/kernel/platform"
 # XNU_MAKE_KEEP_GOING=1 (make -k) compiles every object that can be compiled and reports all errors of one run.
 MAKE_KEEP_GOING=()
 if [ "$(flag XNU_MAKE_KEEP_GOING)" = 1 ]; then
@@ -194,4 +200,9 @@ make ${MAKE_KEEP_GOING[@]+"${MAKE_KEEP_GOING[@]}"} -C "$WORK" "${XNU_BUILD_TARGE
   BUILD_LTO=0 BOUND_CHECKS=0 BUILD_WERROR="${XNU_BUILD_WERROR:-0}" MAKEJOBS=-j"$JOBS" \
   CFLAGS_EXTRA="$EXTRA_CFLAGS" "${EXTRA_MAKE_ARGS[@]}" \
   OBJROOT="$OUT/ios-obj" SYMROOT="$OUT/ios-sym" DSTROOT="$OUT/ios-dst"
-find "$OUT/ios-sym" "$OUT/ios-obj/DEVELOPMENT_ARM64_BCM2837" -maxdepth 1 \( -name 'kernel.*' -o -name 'mach.*' \) -type f -exec ls -l {} +
+# The iPhoneOS kernel is mach.development.bcm2837[.unstripped[.noctf]] in the object directory; ios-sym may not exist.
+for directory in "$OUT/ios-sym" "$OBJ"; do
+  if [ -d "$directory" ]; then
+    find "$directory" -maxdepth 1 \( -name 'kernel.*' -o -name 'mach.*' \) -type f -exec ls -l {} +
+  fi
+done
