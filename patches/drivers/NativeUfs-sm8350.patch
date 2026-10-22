@@ -464,3 +464,43 @@ index fde4ba0..85a93ef 100644
    // A final physical 4K read may include padding, but cannot enter another window.
    expect([]{put64(manifest+24+40,4096+512);put64(manifest+24+128+32,8192);},true,6);
    // Bounded mutation pass checks parser memory safety, not semantic correctness.
+diff --git a/tests/RootCommandsArm64.cpp b/tests/RootCommandsArm64.cpp
+index 12db0cf..e57a4d2 100644
+--- a/tests/RootCommandsArm64.cpp
++++ b/tests/RootCommandsArm64.cpp
+@@ -66,7 +66,13 @@ static void check(bool okay,const char *label) {
+   puts("FAIL "); puts(label); puts("\n");
+   number("result",gRootDiagnostic.result); number("ocs",gRootDiagnostic.ocs);
+   number("polls",gRootDiagnostic.polls); number("dbSeen",gRootDiagnostic.dbSeen);
+-  number("isSeen",gRootDiagnostic.isSeen); finish(1);
++  number("isSeen",gRootDiagnostic.isSeen);
++  number("protocol",gRootDiagnostic.protocol); number("scsi",gRootDiagnostic.scsi);
++  number("response",gRootDiagnostic.response); number("sense",gRootDiagnostic.sense);
++  if(gHost.virt) {
++    for(unsigned i=0;i<8;++i) number("responseWord",loadBe32(gHost.virt+kUcdOffset+kRspOffset+4*i));
++  }
++  finish(1);
+ }
+ extern "C" [[noreturn]] void guest_exception() {
+   puts("FAIL exception\n"); uint64_t v;
+diff --git a/tests/check_arm64_root_commands.py b/tests/check_arm64_root_commands.py
+index decfc1b..5b41c84 100644
+--- a/tests/check_arm64_root_commands.py
++++ b/tests/check_arm64_root_commands.py
+@@ -29,6 +29,7 @@ def main():
+     parser.add_argument('--qemu',default='qemu-system-aarch64')
+     parser.add_argument('--clang',default='clang++')
+     parser.add_argument('--linker',default='ld.lld')
++    parser.add_argument('--source-revision',help='Pinned source commit for an exported build copy; hashes still cover tested bytes')
+     args=parser.parse_args()
+     out=args.output.resolve(); out.mkdir(parents=True,exist_ok=True)
+     if shutil.disk_usage(out).free < 5*1024**3+512*1024**2:
+@@ -104,7 +105,7 @@ SECTIONS {
+                                              'RootTransportLayout.h','RootDiagnostics.h')]
+     report={'results':results,'qemu':subprocess.check_output([qemu,'--version'],text=True).splitlines()[0],
+             'compiler':subprocess.check_output([compiler,'--version'],text=True).splitlines()[0],
+-            'source_revision':subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip(),
++            'source_revision':args.source_revision or subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip(),
+             'source_sha256':{str(f.relative_to(source.parent)):hashlib.sha256(f.read_bytes()).hexdigest() for f in files},
+             'extracted_primitives_sha256':hashlib.sha256(extracted.encode()).hexdigest(),
+             'scope':'EL1 TCG, active native 4K tables, cached VA != DMA PA, production ARM64 commands/DC/barriers; '
