@@ -132,6 +132,11 @@ fi
 EXTRA_CFLAGS=${XNU_EXTRA_CFLAGS:--Wno-reserved-identifier -Wno-pre-c11-compat -Wno-missing-designated-field-initializers -Wno-suggest-override -Wno-unnecessary-virtual-specifier -Wno-suggest-destructor-override -Wno-ms-bitfield-padding}
 EXTRA_MAKE_ARGS=()
 OBJ=$OUT/ios-obj/DEVELOPMENT_ARM64_BCM2837
+SOURCE_CRYPTO=${XNU_SOURCE_CORECRYPTO14:-0}
+if [ "$SOURCE_CRYPTO" != 0 ] && [ "$SOURCE_CRYPTO" != 1 ]; then
+  echo 'XNU_SOURCE_CORECRYPTO14 must be 0 or 1' >&2
+  exit 1
+fi
 
 # flag VARIABLE: the 0/1 value of a CONFIG_XNU_ option (0 when unset).
 flag() {
@@ -181,6 +186,10 @@ rebuild_on_change dt-panic-region-mode "$DT_PANIC_REGION" pexpert/DEVELOPMENT/pe
 TRUST_CACHE_MODE=$(flag XNU_TRUST_CACHE_RUNTIME)
 EXTRA_MAKE_ARGS+=("startup.o_CFLAGS_ADD=-DXNU_NATIVE_TRUST_CACHE=$TRUST_CACHE_MODE")
 rebuild_on_change trust-cache-mode "$TRUST_CACHE_MODE" osfmk/DEVELOPMENT/startup.o
+if [ "$SOURCE_CRYPTO" = 1 ]; then
+  EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_SOURCE_CORECRYPTO14=1"
+fi
+rebuild_on_change source-crypto-mode "$SOURCE_CRYPTO" osfmk/DEVELOPMENT/prng_random.o pexpert/DEVELOPMENT/pe_init.o
 
 export KERNEL_SDKROOT=$FAKEROOT
 # The search paths xnu adds for SDK and KDK content this build does not have (iBoot and AppleFeatures headers,
@@ -194,6 +203,7 @@ MAKE_KEEP_GOING=()
 if [ "$(flag XNU_MAKE_KEEP_GOING)" = 1 ]; then
   MAKE_KEEP_GOING=(-k)
 fi
+build_kernel() {
 make ${MAKE_KEEP_GOING[@]+"${MAKE_KEEP_GOING[@]}"} -C "$WORK" "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" KDKROOT="$KDKROOT" \
   ARCH_CONFIGS=ARM64 MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \
   ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64 LARGE_MEMORY_DEFINE=-UARM_LARGE_MEMORY \
@@ -202,8 +212,24 @@ make ${MAKE_KEEP_GOING[@]+"${MAKE_KEEP_GOING[@]}"} -C "$WORK" "${XNU_BUILD_TARGE
   DEPLOYMENT_LINKER_FLAGS="-Wl,-ios_version_min,$IOS_MIN" \
   RC_DARWIN_KERNEL_VERSION="$XNU_DARWIN" RC_ProjectSourceVersion="$XNU_VERSION" \
   BUILD_LTO=0 BOUND_CHECKS=0 BUILD_WERROR="${XNU_BUILD_WERROR:-0}" MAKEJOBS=-j"$JOBS" \
-  CFLAGS_EXTRA="$EXTRA_CFLAGS" "${EXTRA_MAKE_ARGS[@]}" \
+  CFLAGS_EXTRA="$EXTRA_CFLAGS" "${EXTRA_MAKE_ARGS[@]}" "$@" \
   OBJROOT="$OUT/ios-obj" SYMROOT="$OUT/ios-sym" DSTROOT="$OUT/ios-dst"
+}
+if [ "$SOURCE_CRYPTO" = 1 ]; then
+  # First produce the unlinked objects/filelist for collision discovery.
+  # Bootstrap references are enabled only after the provider archive exists.
+  rm -f "$OBJ/osfmk/DEVELOPMENT/prng_random.o" "$OBJ/pexpert/DEVELOPMENT/pe_init.o"
+  build_kernel CFLAGS_EXTRA="$EXTRA_CFLAGS -UXNU_SOURCE_CORECRYPTO14"
+  python3 scripts/build-corecrypto-14.py --xnu-12377
+  python3 scripts/build-corecrypto-14.py --xnu-12377 --namespace
+  CRYPTO_ARCHIVE=$ROOT/build/corecrypto-12377/libcorecrypto_kernel_noasm-namespaced.a
+  rm -f "$OBJ/osfmk/DEVELOPMENT/prng_random.o" "$OBJ/pexpert/DEVELOPMENT/pe_init.o"
+  build_kernel "LD_KERNEL_ARCHIVES=-L$FAKEROOT/usr/local/lib/kernel -lfirehose_kernel $CRYPTO_ARCHIVE" \
+    "XNU_EXTERNAL_KERNEL_ARCHIVES=$CRYPTO_ARCHIVE"
+  python3 scripts/seal-source-crypto-kernel.py "$OBJ/mach.development.bcm2837.unstripped.noctf"
+else
+  build_kernel
+fi
 # The iPhoneOS kernel is mach.development.bcm2837[.unstripped[.noctf]] in the object directory; ios-sym may not exist.
 for directory in "$OUT/ios-sym" "$OBJ"; do
   if [ -d "$directory" ]; then
