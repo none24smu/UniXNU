@@ -161,6 +161,10 @@ rebuild_on_change() {
 NATIVE_ARCH_TIMER=$(flag XNU_NATIVE_ARCH_TIMER)
 EXTRA_MAKE_ARGS+=("start.o_SFLAGS_ADD=-DXNU_NATIVE_ARCH_TIMER=$NATIVE_ARCH_TIMER")
 rebuild_on_change native-arch-timer-mode "$NATIVE_ARCH_TIMER" osfmk/DEVELOPMENT/start.o
+# An EL1 port may have access to the virtual timer while physical-timer control traps.
+VIRTUAL_TIMER_ONLY=$(flag XNU_VIRTUAL_TIMER_ONLY)
+EXTRA_MAKE_ARGS+=("machine_routines.o_CFLAGS_ADD=-DXNU_VIRTUAL_TIMER_ONLY=$VIRTUAL_TIMER_ONLY")
+rebuild_on_change virtual-timer-only-mode "$VIRTUAL_TIMER_ONLY" osfmk/DEVELOPMENT/machine_routines.o
 # PAN on ARMv8.1+ cores; the files that read the PAN register by name need ARMv8.1 code generation.
 NATIVE_PAN=$(flag XNU_NATIVE_PAN)
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_PAN=$NATIVE_PAN"
