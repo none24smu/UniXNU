@@ -20,8 +20,9 @@ source = ROOT / 'scripts/native-dwc3-console.c' if args.component == 'NativeDwc3
 if args.component == 'ArmCpu':
     patched = out / 'ArmCpu.cpp'
     patched.write_bytes(source.read_bytes())
-    driver_patch = ROOT / 'patches/drivers/ArmCpu-arm64-assembly.patch'
-    subprocess.run(['git', 'apply', '--directory', str(out.relative_to(ROOT)), driver_patch], cwd=ROOT, check=True)
+    for patch_name in ('ArmCpu-arm64-assembly.patch', 'ArmCpu-12377-boot-interrupt.patch'):
+        driver_patch = ROOT / 'patches/drivers' / patch_name
+        subprocess.run(['git', 'apply', '--directory', str(out.relative_to(ROOT)), driver_patch], cwd=ROOT, check=True)
     source = patched
 # Darwin's ARM64 assembler treats ';' as a comment: use explicit newlines.
 for assembly in re.findall(r'__asm__\s+volatile\s*\(\s*"((?:\\.|[^"\\])*)"', source.read_text()):
