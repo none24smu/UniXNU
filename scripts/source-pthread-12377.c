@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
+#include <sys/param.h>
+#include <sys/proc.h>
 #include <kern/startup.h>
 #include <kern/debug.h>
 #include <libkern/section_keywords.h>

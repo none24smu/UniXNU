@@ -28,7 +28,10 @@ SOURCE = WORK
 OUT = ROOT / 'build/libpthread-12377'
 OUT.mkdir(parents=True, exist_ok=True)
 object_directory = ROOT / 'build/xnu-12377.121.6/ios-obj/DEVELOPMENT_ARM64_BCM2837'
-recipe = object_directory / 'osfmk/DEVELOPMENT/prng_random.o.json'
+recipes = list(object_directory.rglob('pthread_shims.o.json'))
+if len(recipes) != 1:
+    raise SystemExit(f'Expected one compiled BSD pthread-shim recipe, found {recipes}')
+recipe = recipes[0]
 record = json.loads(recipe.read_text().strip().rstrip(','))
 sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
 
@@ -48,12 +51,6 @@ def compile_one(source, destination, namespace=None):
             else:
                 command.append(value)
             index += 1
-        # This bootstrap is a kernel translation unit, using the recorded
-        # osfmk recipe and internal EXPORT_HDRS. pthread_shims.h includes
-        # sys/user.h, whose XNU-private kqueue definitions also require the
-        # BSD-private workqueue types. The extension objects below continue
-        # to use installed Kernel.framework headers and the callback ABI.
-        command.append('-DBSD_KERNEL_PRIVATE=1')
     else:
         framework = ROOT / '.cache/xnu-12377.121.6-fakeroot/System/Library/Frameworks/Kernel.framework/Versions/A'
         command = ['xcrun', '--sdk', 'iphoneos', 'clang', '-target', 'arm64-apple-ios26.0',
