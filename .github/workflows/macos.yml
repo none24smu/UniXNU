@@ -191,6 +191,25 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Show build errors
+        if: failure()
+        run: |
+          # The failing step shows only the last lines of its log; with parallel make the first error is earlier.
+          for log in out/*/logs/*.log; do
+            [ -f "$log" ] || continue
+            echo "== $log"
+            grep -n -B3 -A12 -E '(error|fatal error):|\*\*\* \[' "$log" | head -400 || true
+          done
+
+      - name: Upload logs of a failed build
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unixnu-logs-${{ inputs.defconfig }}
+          path: out/*/logs/**
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Upload userdata
         if: inputs.upload_userdata && contains(inputs.steps, 'userdata')
         uses: actions/upload-artifact@v4
