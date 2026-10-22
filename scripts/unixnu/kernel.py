@@ -1,6 +1,7 @@
 """XNU kernel: build from the patched Apple source, then prelink against the original kernelcache."""
 import os
 import shlex
+import shutil
 from pathlib import Path
 
 from . import ipsw
@@ -73,15 +74,18 @@ def build(ctx, modules):
     for name in ('git', 'make', 'clang', 'cmake', 'ninja', 'unifdef'):
         tool(name, 'brew install ' + name)
     tool('xcodebuild', 'the kernel step builds with the Xcode iphoneos SDK')
-    script = ctx.tree / 'scripts/build-xnu-4k-baseline.sh'
+    # CONFIG_XNU_BUILD_SCRIPT picks the kernel build of the configuration (build-xnu-12377.sh for xnu-12377).
+    name = ctx.need_config().get('XNU_BUILD_SCRIPT') or 'build-xnu-4k-baseline.sh'
+    script = ctx.tree / 'scripts' / name
     if not script.is_file():
         raise Error(f'{script} missing')
+    baseline = name == 'build-xnu-4k-baseline.sh'
     env = dict(os.environ)
     env.update(xnu_env(ctx))
     env.update(version_env(modules))
     env['JOBS'] = str(ctx.jobs)
     record = ctx.tree / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/startup.o.json'
-    if not record.is_file():
+    if baseline and not record.is_file():
         # The archive builders and the boot progress layer read compile records of the XNU build, which only an earlier
         # pass leaves behind. A first build from scratch therefore runs one pass without them; XNU_BOOTSTRAP makes it
         # skip the archive checks and link without the archives, so it stops at the link and only the records are
@@ -100,6 +104,15 @@ def build(ctx, modules):
             log_file=ctx.logs / 'storage-headers.log')
     build_archives(ctx, env)
     run(['bash', script], cwd=ctx.tree, env=env, log_file=ctx.logs / 'kernel.log')
+    # [kernel] outputs: files of the build tree kept in out/<device>/kernel (and the CI artifact) next to the prelinked kernel.
+    for output in ctx.board.get('kernel', {}).get('outputs', []):
+        source = ctx.tree / output
+        if not source.is_file():
+            raise Error(f'[kernel] outputs: {source} was not built')
+        target = ctx.work / 'kernel' / source.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        log(f'kernel: {target} sha256 {sha256_file(target)}')
 
 
 def prelink(ctx):

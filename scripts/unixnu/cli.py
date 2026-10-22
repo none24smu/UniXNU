@@ -126,7 +126,10 @@ def cmd_build(ctx):
     modules = prepare(ctx, steps + (['kernel'] if 'prelink' in steps else []))
     if 'kernel' in steps:
         kernel.build(ctx, modules)
-        kernel.prelink(ctx)
+        if ctx.board.get('kernel', {}).get('prelink'):
+            kernel.prelink(ctx)
+        else:
+            log('kernel: board.toml has no [kernel.prelink]; the kernel is built but not prelinked')
     elif 'prelink' in steps:
         kernel.prelink(ctx)
     if 'package' in steps:
