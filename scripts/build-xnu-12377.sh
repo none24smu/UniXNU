@@ -226,7 +226,7 @@ if [ "$SOURCE_CRYPTO" = 1 ]; then
   rm -f "$OBJ/osfmk/DEVELOPMENT/prng_random.o" "$OBJ/pexpert/DEVELOPMENT/pe_init.o"
   build_kernel "LD_KERNEL_ARCHIVES=-L$FAKEROOT/usr/local/lib/kernel -lfirehose_kernel $CRYPTO_ARCHIVE" \
     "XNU_EXTERNAL_KERNEL_ARCHIVES=$CRYPTO_ARCHIVE"
-  python3 scripts/seal-source-crypto-kernel.py "$OBJ/mach.development.bcm2837.unstripped.noctf"
+  python3 scripts/seal-source-crypto-kernel.py --static-if-defaults "$OBJ/mach.development.bcm2837.unstripped.noctf"
 else
   build_kernel
 fi
