@@ -48,7 +48,8 @@ if args.xnu_12377:
     xnu = ROOT / '.cache/xnu-12377.121.6-work'
     def normalized(text):
         return re.sub(r'\s+', '', re.sub(r'/\*.*?\*/|//[^\n]*', '', text, flags=re.S))
-    for name in ('ccmode', 'cchmac'):
+    shared_headers = ('ccmode', 'cchmac', 'ccrsa', 'cczp', 'ccchacha20poly1305')
+    for name in shared_headers:
         if normalized((SOURCE / name / 'corecrypto' / (name + '.h')).read_text()) != normalized(
                 (xnu / 'EXTERNAL_HEADERS/corecrypto' / (name + '.h')).read_text()):
             raise SystemExit(f'Unaudited {name} ABI change')
@@ -70,7 +71,7 @@ if args.xnu_12377:
         raise SystemExit(f'Incomplete crypto callback coverage: {sorted(fields ^ assigned)}')
     (OUT / 'abi-report.json').write_text(json.dumps({
         'callback_fields_assigned': sorted(fields), 'rng_and_prng_callbacks_match': True,
-        'mode_and_hmac_headers_match': True, 'digest_descriptor_uses_kernel_header': True,
+        'shared_headers_match': list(shared_headers), 'digest_descriptor_uses_kernel_header': True,
         'provider_private_contexts_are_opaque_to_xnu': True,
         'runtime_compatibility_verified': False}, indent=2) + '\n')
 subprocess.run(['plutil', '-convert', 'json', '-o', OUT / 'project.json',
