@@ -62,7 +62,7 @@ static uint32_t read_reg(unsigned);
 static void write_reg(unsigned, uint32_t);
 static void reset_bootloader(void);
 #else
-static uint64_t ticks(void) { uint64_t value; __asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(value)); return value; }
+static uint64_t ticks(void) { uint64_t value; __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(value)); return value; }
 static void cache_sync(void *address, size_t bytes)
 {
     uint64_t ctr; __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));

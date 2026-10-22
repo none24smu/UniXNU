@@ -2,6 +2,7 @@
 """Build the generic platform and CPU drivers with the current XNU 12377 ABI."""
 import argparse
 import json
+import re
 from pathlib import Path
 import struct
 import subprocess
@@ -16,6 +17,16 @@ record = json.loads((obj / recipe).read_text().strip().rstrip(','))
 out = ROOT / 'build/platform-12377' / args.component
 out.mkdir(parents=True, exist_ok=True)
 source = ROOT / 'scripts/native-dwc3-console.c' if args.component == 'NativeDwc3Console' else ROOT / 'drivers' / args.component / (args.component + '.cpp')
+if args.component == 'ArmCpu':
+    patched = out / 'ArmCpu.cpp'
+    patched.write_bytes(source.read_bytes())
+    driver_patch = ROOT / 'patches/drivers/ArmCpu-arm64-assembly.patch'
+    subprocess.run(['git', 'apply', '--directory', str(out.relative_to(ROOT)), driver_patch], cwd=ROOT, check=True)
+    source = patched
+# Darwin's ARM64 assembler treats ';' as a comment: use explicit newlines.
+for assembly in re.findall(r'__asm__\s+volatile\s*\(\s*"((?:\\.|[^"\\])*)"', source.read_text()):
+    if ';' in assembly:
+        raise SystemExit('Semicolon in inline assembly would discard following ARM64 instructions')
 destination = out / (args.component + '.o')
 command = []
 arguments = record['arguments']
@@ -54,6 +65,26 @@ for _ in range(struct.unpack_from('<I', data, 16)[0]):
     cursor += size
 if deployment != (2, 26 << 16):
     raise SystemExit(f'Expected iOS 26 deployment, found {deployment}')
+if args.component == 'NativeDwc3Console':
+    cursor = 32
+    checked = 0
+    for _ in range(struct.unpack_from('<I', data, 16)[0]):
+        kind, size = struct.unpack_from('<II', data, cursor)
+        if kind == 0x19:
+            for index in range(struct.unpack_from('<I', data, cursor + 64)[0]):
+                section = cursor + 72 + index * 80
+                if data[section:section+16].rstrip(b'\0') == b'__text':
+                    length, offset = struct.unpack_from('<QI', data, section + 40)
+                    words = struct.unpack_from('<' + 'I' * (length // 4), data, offset)
+                    for index, word in enumerate(words):
+                        if word == 0xd5033fdf:
+                            if index + 1 == len(words) or words[index + 1] & 0xffffffe0 != 0xd53be020:
+                                raise SystemExit('Native USB timeout ISB lacks its emitted CNTPCT_EL0 read')
+                            checked += 1
+        cursor += size
+    if not checked:
+        raise SystemExit('No native USB counter sequences found')
+    (out / 'counter-audit.json').write_text(json.dumps({'isb_counter_pairs_verified': checked}) + '\n')
 archive = out / ('lib' + args.component + '.a')
 archive.unlink(missing_ok=True)
 subprocess.run(['xcrun', 'ar', 'rcs', archive, destination], check=True)
