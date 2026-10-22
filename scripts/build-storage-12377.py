@@ -8,6 +8,7 @@ from pathlib import Path
 import struct
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -24,8 +25,16 @@ OUT.mkdir(parents=True, exist_ok=True)
 UFS = OUT / 'NativeUfs'
 shutil.copytree(ROOT / 'drivers/NativeUfs', UFS,
                 ignore=shutil.ignore_patterns('.git', 'build'), dirs_exist_ok=True)
-subprocess.run(['git', 'apply', '--directory', str(UFS.relative_to(ROOT)),
-                str(ROOT / 'patches/drivers/NativeUfs-sm8350.patch')], cwd=ROOT, check=True)
+# The assembled tree is nested inside the checkout. git apply can otherwise
+# silently skip paths outside that repository-relative cwd prefix. Apply from
+# a fresh non-repository directory to the explicit exported source path, then
+# prove the complete patch is present before compiling anything.
+patch = ROOT / 'patches/drivers/NativeUfs-sm8350.patch'
+with tempfile.TemporaryDirectory(prefix='unixnu-ufs-patch-') as temporary:
+    command = ['git', 'apply', '--unsafe-paths', '--directory', str(UFS)]
+    subprocess.run(command + [str(patch)], cwd=temporary, check=True)
+    subprocess.run(command + ['--reverse', '--check', str(patch)], cwd=temporary, check=True)
+print('Storage 12377: complete SM8350 source patch verified', flush=True)
 OBJ = ROOT / 'build/xnu-12377.121.6/ios-obj/DEVELOPMENT_ARM64_BCM2837'
 record = json.loads((OBJ / 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json').read_text().strip().rstrip(','))
 
