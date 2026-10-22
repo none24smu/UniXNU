@@ -36,7 +36,7 @@ index 5d11663..335b23f 100644
  #define GCC_UFS_BRANCH_ENABLE_BIT     0x1U
  
 diff --git a/NativeUfs.cpp b/NativeUfs.cpp
-index bdf3df5..5aba332 100644
+index bdf3df5..ee5f244 100644
 --- a/NativeUfs.cpp
 +++ b/NativeUfs.cpp
 @@ -125,10 +125,10 @@ IOService *NativeUfs::probe (IOService *provider, SInt32 *score)
@@ -124,6 +124,110 @@ index bdf3df5..5aba332 100644
    gHost.smmu = gHost.smmuMap->getVirtualAddress ();
    uint32_t idr1 = read32 (gHost.smmu, 0x24);
    gHost.cb = gHost.smmu + ((1U << (((idr1 >> 28) & 7) + 1)) + (report[0] >> 16)) * 4096;
+@@ -1215,6 +1219,7 @@ class NativeUfsBlock : public IOBlockStorageDevice {
+   struct vr_view verified = {};
+   vm_offset_t verifiedStorage = 0;
+   vm_size_t verifiedStorageBytes = 0;
++  uint64_t diskPolicyAbsolute = 0, diskPolicyBytes = 0;
+   bool configureVerification ();
+ #endif
+ public:
+@@ -1223,7 +1228,8 @@ public:
+   bool signedVolumeUuid (char out[37]) const;
+ #endif
+   const char *windowLabel () const { return label; }
+-  bool configure (const char *name, uint64_t absoluteOffset, uint64_t size);
++  bool configure (const char *name, uint64_t absoluteOffset, uint64_t size,
++                  uint64_t policyAbsolute = 0, uint64_t policyBytes = 0);
+   bool start (IOService *provider) override;
+   void free () override;
+   IOReturn doEjectMedia () override { return kIOReturnUnsupported; }
+@@ -1283,7 +1289,8 @@ static void rootDiagnosticFailure (const char *reason)
+   panic ("%s", gRootDiagnosticText);
+ }
+ 
+-bool NativeUfsBlock::configure (const char *name, uint64_t absoluteOffset, uint64_t size)
++bool NativeUfsBlock::configure (const char *name, uint64_t absoluteOffset, uint64_t size,
++                                uint64_t policyAbsolute, uint64_t policyBytes)
+ {
+   if (!name || !ufsWindowGeometry (absoluteOffset, size)) {
+     return false;
+@@ -1300,6 +1307,8 @@ bool NativeUfsBlock::configure (const char *name, uint64_t absoluteOffset, uint6
+ #if defined(NATIVE_VERIFIED_BLOCK) && NATIVE_VERIFIED_BLOCK
+   // Reads are served only after each 4096-byte integrity block verifies against the owner-signed
+   // policy; without a matching policy the device is never published.
++  diskPolicyAbsolute = policyAbsolute;
++  diskPolicyBytes = policyBytes;
+   return configureVerification ();
+ #else
+   return true;
+@@ -1317,11 +1326,25 @@ bool NativeUfsBlock::configureVerification ()
+ {
+   gRootDiagnostic.stage = "policy selection";
+   gRootDiagnostic.windowBytes = bytes;
++#if defined(NATIVE_UFS_POLICY_FROM_DISK) && NATIVE_UFS_POLICY_FROM_DISK
++  gRootDiagnostic.policyCount = 1;
++#else
+   gRootDiagnostic.policyCount = verified_root_policy_count;
++#endif
+   gRootDiagnostic.verify = 0xffffffff;
+   // Select the one policy whose signed image size equals this window; two matches are refused.
+   const uint8_t *manifest = nullptr;
+   uint64_t manifestBytes = 0;
++#if defined(NATIVE_UFS_POLICY_FROM_DISK) && NATIVE_UFS_POLICY_FROM_DISK
++  manifestBytes = diskPolicyBytes;
++  uint64_t expected = VR_HEADER_BYTES + VR_SIGNATURE_BYTES +
++    (bytes / VR_BLOCK_BYTES + (bytes % VR_BLOCK_BYTES != 0)) * 32;
++  if (!diskPolicyAbsolute || (diskPolicyAbsolute & 4095) ||
++      manifestBytes != expected || manifestBytes > 128ULL * 1024 * 1024) {
++    gRootDiagnostic.stage = "disk policy geometry";
++    return false;
++  }
++#else
+   if (!verified_root_policy_count || verified_root_policy_count > 16) {
+     gRootDiagnostic.stage = "policy count invalid";
+     return false;
+@@ -1350,6 +1373,7 @@ bool NativeUfsBlock::configureVerification ()
+     gRootDiagnostic.stage = "no capacity-matching policy";
+     return false;
+   }
++#endif
+   gRootDiagnostic.stage = "policy storage";
+   vm_size_t tableBytes = round_page (static_cast<vm_size_t> (manifestBytes));
+   if (tableBytes < manifestBytes || tableBytes > UINT64_MAX - 4096) {
+@@ -1362,7 +1386,20 @@ bool NativeUfsBlock::configureVerification ()
+                   static_cast<kma_flags_t> (KMA_KOBJECT | KMA_DATA), VM_KERN_MEMORY_SECURITY) != KERN_SUCCESS) {
+     return false;
+   }
++#if defined(NATIVE_UFS_POLICY_FROM_DISK) && NATIVE_UFS_POLICY_FROM_DISK
++  gRootDiagnostic.stage = "disk policy read";
++  // The final rounded read stays in the envelope's validated padded extent.
++  // Do not expose this buffer as a verified view until vr_open succeeds.
++  for (uint64_t offset = 0; offset < tableBytes;) {
++    uint32_t count = static_cast<uint32_t> ((tableBytes - offset) / 4096);
++    if (count > kDataMax / 4096) count = kDataMax / 4096;
++    if (hostRead4k (0, (diskPolicyAbsolute + offset) / 4096, count,
++                    reinterpret_cast<void *> (verifiedStorage + offset)) != kIOReturnSuccess) return false;
++    offset += count * 4096ULL;
++  }
++#else
+   memcpy (reinterpret_cast<void *> (verifiedStorage), manifest, manifestBytes);
++#endif
+   uint8_t *key = reinterpret_cast<uint8_t *> (verifiedStorage + tableBytes);
+   memcpy (key, verified_root_key, VR_KEY_BYTES);
+   gRootDiagnostic.stage = "policy read-only protection";
+@@ -1903,7 +1940,10 @@ bool NativeUfs::startRoot (IOService *provider)
+       gPendingUuid[index][0] = 0;
+       uint64_t absolute = layout->userdataFirst * 4096ULL + layout->window[index].offset;
+       if (!device || !device->init (static_cast<OSDictionary *> (nullptr)) ||
+-          !device->configure (layout->window[index].name, absolute, layout->window[index].size)) return false;
++          !device->configure (layout->window[index].name, absolute, layout->window[index].size,
++                              layout->window[index].policyOffset ?
++                                layout->userdataFirst * 4096ULL + layout->window[index].policyOffset : 0,
++                              layout->window[index].policyBytes)) return false;
+       gRootDiagnostic.stage = "root window attachment";
+       if (!device->attach (owner)) return false;
+       gPendingAttached[index] = true;
 diff --git a/RootQueue.h b/RootQueue.h
 index 989b956..716b347 100644
 --- a/RootQueue.h
@@ -262,3 +366,87 @@ index bc94443..d134fa3 100644
 +  r[0xc08/4]=3; writes.clear(); assert(configureUfsSmmu(p,0xe0,read,write) && writes.empty());
    puts("PASS: SMMU geometry/conflicts, VA64 high-DMA regression, full-range width limits, ordered configuration, reuse/repair and blocked-write refusal");
  }
+diff --git a/RootLayout.h b/RootLayout.h
+index 4a596c8..611f578 100644
+--- a/RootLayout.h
++++ b/RootLayout.h
+@@ -7,6 +7,7 @@ struct RootWindow {
+   uint64_t offset;   // bytes from the start of the userdata partition
+   uint64_t size;     // bytes
+   uint8_t sha256[32];
++  uint64_t policyOffset, policyBytes; // optional owner envelope, relative to userdata
+ };
+ 
+ struct RootLayout {
+@@ -16,7 +17,7 @@ struct RootLayout {
+   uint32_t gptHeaderCrc, gptEntriesCrc, gptEntryCount;
+   uint32_t windows;
+   RootWindow window[4];
+-  uint32_t manifestStatus;                // 0 ok, 1 no manifest magic, 2 bad version/count, 3 hash, 4 bounds, 5 names, 6 overlap, 7 attributes
++  uint32_t manifestStatus;                // 0 ok, 1 no manifest magic, 2 bad version/count, 3 hash, 4 bounds, 5 names, 6 overlap, 7 attributes, 8 disk policy
+   uint32_t magic0, magic1;                // first 8 bytes of the partition's first block
+   uint32_t ext4Magic;                     // 16 bits at byte 1080 of the partition (0xef53 on Linux ext4)
+   uint32_t ext4Blocks;                    // s_blocks_count_lo at byte 1028
+@@ -202,6 +203,37 @@ static bool findRootLayout (RootLayout *layout, const char **why)
+           layout->window[index].offset = offset;
+           layout->window[index].size = size;
+           memcpy (layout->window[index].sha256, entry + 56, 32);
++          layout->window[index].policyOffset = le64 (entry + 88);
++          layout->window[index].policyBytes = le64 (entry + 96);
++          for (unsigned reserved = 104; reserved < 128; ++reserved) {
++            if (entry[reserved]) { layout->manifestStatus = 8; bounds = false; break; }
++          }
++        }
++        // An envelope is untrusted until vr_open verifies its signature and hash
++        // table. Bound its physical reads before allocating or submitting DMA.
++        for (uint32_t index = 0; index < n && bounds; ++index) {
++          const RootWindow &w = layout->window[index];
++          if (!w.policyOffset && !w.policyBytes) continue; // legacy embedded policy
++          uint64_t rounded = (w.policyBytes + 4095) & ~4095ULL;
++          uint64_t expected = 544 + (w.size / 4096 + (w.size % 4096 != 0)) * 32;
++          if (!w.policyOffset || (w.policyOffset & 4095) || w.policyOffset < 4096 ||
++              w.policyBytes != expected || w.policyBytes > 128ULL * 1024 * 1024 ||
++              w.policyOffset >= imageBytes || rounded > imageBytes - w.policyOffset) {
++            layout->manifestStatus = 8; bounds = false; break;
++          }
++          for (uint32_t other = 0; other < n; ++other) {
++            const RootWindow &o = layout->window[other];
++            if (w.policyOffset < o.offset + ((o.size + 4095) & ~4095ULL) &&
++                o.offset < w.policyOffset + rounded) {
++              layout->manifestStatus = 8; bounds = false; break;
++            }
++            // Previous policies have already passed their overflow/bounds checks.
++            if (other < index && o.policyBytes &&
++                w.policyOffset < o.policyOffset + ((o.policyBytes + 4095) & ~4095ULL) &&
++                o.policyOffset < w.policyOffset + rounded) {
++              layout->manifestStatus = 8; bounds = false; break;
++            }
++          }
+         }
+         if (bounds) {
+           layout->windows = n;
+diff --git a/tests/RootLayout.cpp b/tests/RootLayout.cpp
+index fde4ba0..85a93ef 100644
+--- a/tests/RootLayout.cpp
++++ b/tests/RootLayout.cpp
+@@ -85,6 +85,20 @@ int main(int argc,char **argv) {
+   expect([]{manifest[24]=0;},true,5);
+   expect([]{put32(manifest+24+48,4096);},true,7);
+   expect([]{put32(manifest+24+52,0);},true,7);
++  // Disk policies remain outside all data windows and each other's rounded DMA reads.
++  expect([]{put64(manifest+24+88,32768);put64(manifest+24+96,640);
++            put64(manifest+152+88,36864);put64(manifest+152+96,640);},true,0);
++  expect([]{put64(manifest+24+88,32768);},true,8);
++  expect([]{put64(manifest+24+96,640);},true,8);
++  expect([]{put64(manifest+24+88,32769);put64(manifest+24+96,640);},true,8);
++  expect([]{put64(manifest+24+88,32768);put64(manifest+24+96,639);},true,8);
++  expect([]{put64(manifest+24+88,UINT64_MAX-4095);put64(manifest+24+96,640);},true,8);
++  expect([]{put64(manifest+24+88,65536);put64(manifest+24+96,640);},true,8);
++  expect([]{put64(manifest+24+88,4096);put64(manifest+24+96,640);},true,8);
++  expect([]{put64(manifest+24+88,20480);put64(manifest+24+96,640);},true,8);
++  expect([]{put64(manifest+24+88,32768);put64(manifest+24+96,640);
++            put64(manifest+152+88,32768);put64(manifest+152+96,640);},true,8);
++  expect([]{manifest[24+104]=1;},true,8);
+   // A final physical 4K read may include padding, but cannot enter another window.
+   expect([]{put64(manifest+24+40,4096+512);put64(manifest+24+128+32,8192);},true,6);
+   // Bounded mutation pass checks parser memory safety, not semantic correctness.

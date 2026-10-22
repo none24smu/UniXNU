@@ -2,6 +2,7 @@
 """Build public IOStorageFamily's native kernel path and SM8350 UFS for XNU 12377."""
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 import struct
@@ -56,8 +57,17 @@ sources = [SOURCE / (name + '.cpp') for name in (
     'IOPartitionScheme', 'IOGUIDPartitionScheme', 'IOFDiskPartitionScheme',
     'IOApplePartitionScheme', 'IOAppleLabelScheme', 'IOFilterScheme')]
 sources += [patched, UFS / 'NativeUfs.cpp']
+verified = os.environ.get('XNU_NATIVE_UFS_VERIFIED_ROOT') == '1'
+extra = []
+if verified:
+    anchor = ROOT / 'scripts/zeta-owner-root-key.h'
+    if not anchor.is_file():
+        raise SystemExit('Verified UFS root requires the independent public owner anchor')
+    extra = ['-DNATIVE_VERIFIED_BLOCK=1', '-DNATIVE_UFS_POLICY_FROM_DISK=1',
+             '-I', str(ROOT / 'kits/VerifiedRoot/include'),
+             '-I', str(ROOT / 'drivers/NativeVirtioBlock')]
 objects = []
-for source in sources:
+def compile_one(source, record):
     destination = OUT / (source.stem + '.o')
     command = []
     arguments = record['arguments']
@@ -76,7 +86,7 @@ for source in sources:
         elif value not in ('-MD', '-MMD', '-MP') and not value.startswith('-W'):
             command.append(value)
         index += 1
-    command += ['-I', str(ROOT / 'build/storage-abi/include'), '-I', str(SOURCE),
+    command += extra + ['-I', str(ROOT / 'build/storage-abi/include'), '-I', str(SOURCE),
                 '-I', str(UFS),
                 '-DNATIVE_UFS_SM8350=1', '-DIOSTORAGE_NATIVE_ONLY=1',
                 '-Wall', '-Wextra', '-Wno-unused-parameter', '-Wno-deprecated-declarations',
@@ -100,6 +110,19 @@ for source in sources:
     objects.append(destination)
     print(f'Storage 12377: compiled {source.name}', flush=True)
 
+for source in sources:
+    compile_one(source, record)
+if verified:
+    recipes = list(OBJ.rglob('pthread_shims.o.json'))
+    if len(recipes) != 1:
+        raise SystemExit('Expected the compiled BSD recipe for owner verification')
+    bsd = json.loads(recipes[0].read_text().strip().rstrip(','))
+    anchor_source = OUT / 'zeta_owner_root.c'
+    anchor_source.write_text('#include "verified_root.h"\n#include "' + str(anchor) + '"\n')
+    for source in (ROOT / 'kits/VerifiedRoot/src/verified_root.c',
+                   ROOT / 'kits/VerifiedRoot/adapters/xnu_crypto.c', anchor_source):
+        compile_one(source, bsd)
+
 def names(path, mode):
     return {s.strip() for s in subprocess.check_output(
         ['xcrun', 'nm', '-g', mode, '-j', path], text=True).splitlines() if s.startswith('_')}
@@ -112,7 +135,7 @@ missing = sorted(imports - kernel - {'___dso_handle'})
 report = {'source_revision': REVISION, 'objects': len(objects),
           'ordinary_arm64_ios26_audited': True, 'native_kernel_backend_only': True,
           'sm8350_stream_id': 0xe0, 'kernel_collisions': collisions,
-          'missing_kernel_imports': missing, 'hardware_qualified': False,
+          'missing_kernel_imports': missing, 'hardware_qualified': False, 'owner_policy_from_ufs': verified,
           'native_driver_sha256': hashlib.sha256(patched.read_bytes()).hexdigest()}
 (OUT / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
 if collisions or missing:
