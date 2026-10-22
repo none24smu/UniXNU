@@ -36,7 +36,7 @@ index 5d11663..335b23f 100644
  #define GCC_UFS_BRANCH_ENABLE_BIT     0x1U
  
 diff --git a/NativeUfs.cpp b/NativeUfs.cpp
-index bdf3df5..ee5f244 100644
+index bdf3df5..bdecc6d 100644
 --- a/NativeUfs.cpp
 +++ b/NativeUfs.cpp
 @@ -125,10 +125,10 @@ IOService *NativeUfs::probe (IOService *provider, SInt32 *score)
@@ -152,7 +152,7 @@ index bdf3df5..ee5f244 100644
  {
    if (!name || !ufsWindowGeometry (absoluteOffset, size)) {
      return false;
-@@ -1300,6 +1307,8 @@ bool NativeUfsBlock::configure (const char *name, uint64_t absoluteOffset, uint6
+@@ -1300,28 +1307,45 @@ bool NativeUfsBlock::configure (const char *name, uint64_t absoluteOffset, uint6
  #if defined(NATIVE_VERIFIED_BLOCK) && NATIVE_VERIFIED_BLOCK
    // Reads are served only after each 4096-byte integrity block verifies against the owner-signed
    // policy; without a matching policy the device is never published.
@@ -161,7 +161,21 @@ index bdf3df5..ee5f244 100644
    return configureVerification ();
  #else
    return true;
-@@ -1317,11 +1326,25 @@ bool NativeUfsBlock::configureVerification ()
+ #endif
+ }
+ 
++// Transport timings also exist in probe-only builds without root publication.
++volatile uint64_t native_ufs_read_ticks = 0;
++static inline uint64_t timerTicks (void) {uint64_t v; __asm__ volatile ("isb\n\tmrs %0, cntpct_el0" : "=r" (v)); return v;}
+ #if defined(NATIVE_VERIFIED_BLOCK) && NATIVE_VERIFIED_BLOCK
+ volatile uint64_t native_ufs_verified_blocks = 0;
+-// Time spent hashing/verifying and reading from the UFS transport, in generic-timer ticks (diagnostic only).
+-volatile uint64_t native_ufs_verify_ticks = 0, native_ufs_read_ticks = 0;
+-static inline uint64_t timerTicks (void) {uint64_t v; __asm__ volatile ("isb\n\tmrs %0, cntpct_el0" : "=r" (v)); return v;}
++volatile uint64_t native_ufs_verify_ticks = 0;
+ volatile uint32_t native_ufs_integrity_failures = 0;
+ 
+ bool NativeUfsBlock::configureVerification ()
  {
    gRootDiagnostic.stage = "policy selection";
    gRootDiagnostic.windowBytes = bytes;
@@ -187,7 +201,7 @@ index bdf3df5..ee5f244 100644
    if (!verified_root_policy_count || verified_root_policy_count > 16) {
      gRootDiagnostic.stage = "policy count invalid";
      return false;
-@@ -1350,6 +1373,7 @@ bool NativeUfsBlock::configureVerification ()
+@@ -1350,6 +1374,7 @@ bool NativeUfsBlock::configureVerification ()
      gRootDiagnostic.stage = "no capacity-matching policy";
      return false;
    }
@@ -195,7 +209,7 @@ index bdf3df5..ee5f244 100644
    gRootDiagnostic.stage = "policy storage";
    vm_size_t tableBytes = round_page (static_cast<vm_size_t> (manifestBytes));
    if (tableBytes < manifestBytes || tableBytes > UINT64_MAX - 4096) {
-@@ -1362,7 +1386,20 @@ bool NativeUfsBlock::configureVerification ()
+@@ -1362,7 +1387,20 @@ bool NativeUfsBlock::configureVerification ()
                    static_cast<kma_flags_t> (KMA_KOBJECT | KMA_DATA), VM_KERN_MEMORY_SECURITY) != KERN_SUCCESS) {
      return false;
    }
@@ -216,7 +230,7 @@ index bdf3df5..ee5f244 100644
    uint8_t *key = reinterpret_cast<uint8_t *> (verifiedStorage + tableBytes);
    memcpy (key, verified_root_key, VR_KEY_BYTES);
    gRootDiagnostic.stage = "policy read-only protection";
-@@ -1903,7 +1940,10 @@ bool NativeUfs::startRoot (IOService *provider)
+@@ -1903,7 +1941,10 @@ bool NativeUfs::startRoot (IOService *provider)
        gPendingUuid[index][0] = 0;
        uint64_t absolute = layout->userdataFirst * 4096ULL + layout->window[index].offset;
        if (!device || !device->init (static_cast<OSDictionary *> (nullptr)) ||
