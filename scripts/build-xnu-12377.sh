@@ -161,8 +161,7 @@ rebuild_on_change() {
 }
 
 # BCM2837 start.s routes the core timers through the Raspberry Pi local interrupt controller (physical 0x40000040)
-# before the MMU is on; other boards need it off. In the xnu-10063 build this also required ArmCpu, the GIC timer
-# provider, which is not ported to xnu-12377 yet: until it is, the kernel has no timer interrupt either way.
+# before the MMU is on; other boards need it off and use ArmCpu's GICv3 provider.
 NATIVE_ARCH_TIMER=$(flag XNU_NATIVE_ARCH_TIMER)
 EXTRA_MAKE_ARGS+=("start.o_SFLAGS_ADD=-DXNU_NATIVE_ARCH_TIMER=$NATIVE_ARCH_TIMER")
 rebuild_on_change native-arch-timer-mode "$NATIVE_ARCH_TIMER" osfmk/DEVELOPMENT/start.o
@@ -190,6 +189,14 @@ if [ "$SOURCE_CRYPTO" = 1 ]; then
   EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_SOURCE_CORECRYPTO14=1"
 fi
 rebuild_on_change source-crypto-mode "$SOURCE_CRYPTO" osfmk/DEVELOPMENT/prng_random.o pexpert/DEVELOPMENT/pe_init.o
+ARM_DT_PLATFORM=$(flag XNU_ARM_DT_PLATFORM)
+ARMCPU=$(flag XNU_ARMCPU)
+if [ "$ARMCPU" = 1 ] && { [ "$ARM_DT_PLATFORM" != 1 ] || [ "$NATIVE_ARCH_TIMER" != 1 ]; }; then
+  echo 'ArmCpu requires ArmDTPlatform and native architectural timer routing' >&2
+  exit 1
+fi
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_ARM_DT_PLATFORM=$ARM_DT_PLATFORM -DXNU_ARMCPU=$ARMCPU"
+rebuild_on_change platform-personalities "$ARM_DT_PLATFORM:$ARMCPU" iokit/DEVELOPMENT/KernelConfigTables.cpo
 
 export KERNEL_SDKROOT=$FAKEROOT
 # The search paths xnu adds for SDK and KDK content this build does not have (iBoot and AppleFeatures headers,
@@ -215,18 +222,35 @@ make ${MAKE_KEEP_GOING[@]+"${MAKE_KEEP_GOING[@]}"} -C "$WORK" "${XNU_BUILD_TARGE
   CFLAGS_EXTRA="$EXTRA_CFLAGS" "${EXTRA_MAKE_ARGS[@]}" "$@" \
   OBJROOT="$OUT/ios-obj" SYMROOT="$OUT/ios-sym" DSTROOT="$OUT/ios-dst"
 }
-if [ "$SOURCE_CRYPTO" = 1 ]; then
+if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ]; then
   # First produce the unlinked objects/filelist for collision discovery.
   # Bootstrap references are enabled only after the provider archive exists.
   rm -f "$OBJ/osfmk/DEVELOPMENT/prng_random.o" "$OBJ/pexpert/DEVELOPMENT/pe_init.o"
-  build_kernel CFLAGS_EXTRA="$EXTRA_CFLAGS -UXNU_SOURCE_CORECRYPTO14"
-  python3 scripts/build-corecrypto-14.py --xnu-12377
-  python3 scripts/build-corecrypto-14.py --xnu-12377 --namespace
-  CRYPTO_ARCHIVE=$ROOT/build/corecrypto-12377/libcorecrypto_kernel_noasm-namespaced.a
+  build_kernel CFLAGS_EXTRA="$EXTRA_CFLAGS -UXNU_SOURCE_CORECRYPTO14 -UXNU_ARM_DT_PLATFORM -UXNU_ARMCPU"
+  ARCHIVE_FLAGS="-L$FAKEROOT/usr/local/lib/kernel -lfirehose_kernel"
+  ARCHIVE_DEPENDENCIES=""
+  if [ "$SOURCE_CRYPTO" = 1 ]; then
+    python3 scripts/build-corecrypto-14.py --xnu-12377
+    python3 scripts/build-corecrypto-14.py --xnu-12377 --namespace
+    CRYPTO_ARCHIVE=$ROOT/build/corecrypto-12377/libcorecrypto_kernel_noasm-namespaced.a
+    ARCHIVE_FLAGS="$ARCHIVE_FLAGS $CRYPTO_ARCHIVE"
+    ARCHIVE_DEPENDENCIES="$CRYPTO_ARCHIVE"
+  fi
+  for component in ArmDTPlatform ArmCpu; do
+    if { [ "$component" = ArmDTPlatform ] && [ "$ARM_DT_PLATFORM" = 1 ]; } || \
+       { [ "$component" = ArmCpu ] && [ "$ARMCPU" = 1 ]; }; then
+      python3 scripts/build-platform-12377.py "$component"
+      archive=$ROOT/build/platform-12377/$component/lib$component.a
+      ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-force_load,$archive"
+      ARCHIVE_DEPENDENCIES="$ARCHIVE_DEPENDENCIES $archive"
+    fi
+  done
   rm -f "$OBJ/osfmk/DEVELOPMENT/prng_random.o" "$OBJ/pexpert/DEVELOPMENT/pe_init.o"
-  build_kernel "LD_KERNEL_ARCHIVES=-L$FAKEROOT/usr/local/lib/kernel -lfirehose_kernel $CRYPTO_ARCHIVE" \
-    "XNU_EXTERNAL_KERNEL_ARCHIVES=$CRYPTO_ARCHIVE"
-  python3 scripts/seal-source-crypto-kernel.py --static-if-defaults "$OBJ/mach.development.bcm2837.unstripped.noctf"
+  rm -f "$OBJ/iokit/DEVELOPMENT/KernelConfigTables.cpo"
+  build_kernel "LD_KERNEL_ARCHIVES=$ARCHIVE_FLAGS" "XNU_EXTERNAL_KERNEL_ARCHIVES=$ARCHIVE_DEPENDENCIES"
+  if [ "$SOURCE_CRYPTO" = 1 ]; then
+    python3 scripts/seal-source-crypto-kernel.py --static-if-defaults "$OBJ/mach.development.bcm2837.unstripped.noctf"
+  fi
 else
   build_kernel
 fi
