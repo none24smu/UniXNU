@@ -48,6 +48,12 @@ def compile_one(source, destination, namespace=None):
             else:
                 command.append(value)
             index += 1
+        # This bootstrap is a kernel translation unit, using the recorded
+        # osfmk recipe and internal EXPORT_HDRS. pthread_shims.h includes
+        # sys/user.h, whose XNU-private kqueue definitions also require the
+        # BSD-private workqueue types. The extension objects below continue
+        # to use installed Kernel.framework headers and the callback ABI.
+        command.append('-DBSD_KERNEL_PRIVATE=1')
     else:
         framework = ROOT / '.cache/xnu-12377.121.6-fakeroot/System/Library/Frameworks/Kernel.framework/Versions/A'
         command = ['xcrun', '--sdk', 'iphoneos', 'clang', '-target', 'arm64-apple-ios26.0',
@@ -64,7 +70,7 @@ def compile_one(source, destination, namespace=None):
     result = subprocess.run(command, cwd=record['directory'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     destination.with_suffix('.log').write_text(result.stdout)
     if result.returncode:
-        raise SystemExit(result.stdout[-4500:])
+        raise SystemExit(f'{source.name}: compilation failed\n{result.stdout}')
     data = destination.read_bytes()
     if struct.unpack_from('<4I', data) != (0xfeedfacf, 0x100000c, 0, 1):
         raise SystemExit('Unexpected pthread object architecture')
