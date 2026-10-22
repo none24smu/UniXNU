@@ -199,6 +199,8 @@ EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_ARM_DT_PLATFORM=$ARM_DT_PLATFORM -DXNU_ARMCPU=
 rebuild_on_change platform-personalities "$ARM_DT_PLATFORM:$ARMCPU" iokit/DEVELOPMENT/KernelConfigTables.cpo
 NATIVE_DWC3_CONSOLE=$(flag XNU_NATIVE_DWC3_CONSOLE)
 SOURCE_PTHREAD=$(flag XNU_SOURCE_PTHREAD)
+NATIVE_UFS_SM8350=$(flag XNU_NATIVE_UFS_SM8350)
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_UFS_SM8350=$NATIVE_UFS_SM8350"
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_DWC3_CONSOLE=$NATIVE_DWC3_CONSOLE"
 rebuild_on_change native-dwc3-console "$NATIVE_DWC3_CONSOLE" pexpert/DEVELOPMENT/pe_serial.o osfmk/DEVELOPMENT/rtclock.o
 
@@ -226,7 +228,7 @@ make ${MAKE_KEEP_GOING[@]+"${MAKE_KEEP_GOING[@]}"} -C "$WORK" "${XNU_BUILD_TARGE
   CFLAGS_EXTRA="$EXTRA_CFLAGS" "${EXTRA_MAKE_ARGS[@]}" "$@" \
   OBJROOT="$OUT/ios-obj" SYMROOT="$OUT/ios-sym" DSTROOT="$OUT/ios-dst"
 }
-if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] || [ "$NATIVE_DWC3_CONSOLE" = 1 ] || [ "$SOURCE_PTHREAD" = 1 ]; then
+if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] || [ "$NATIVE_DWC3_CONSOLE" = 1 ] || [ "$SOURCE_PTHREAD" = 1 ] || [ "$NATIVE_UFS_SM8350" = 1 ]; then
   # First produce the unlinked objects/filelist for collision discovery.
   # Bootstrap references are enabled only after the provider archive exists.
   rm -f "$OBJ/osfmk/DEVELOPMENT/prng_random.o" "$OBJ/pexpert/DEVELOPMENT/pe_init.o"
@@ -255,6 +257,12 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
     clone refer/libpthread-539 libpthread libpthread-539.100.4
     python3 scripts/build-pthread-12377.py
     archive=$ROOT/build/libpthread-12377/libpthread_kernel.a
+    ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-force_load,$archive"
+    ARCHIVE_DEPENDENCIES="$ARCHIVE_DEPENDENCIES $archive"
+  fi
+  if [ "$NATIVE_UFS_SM8350" = 1 ]; then
+    python3 scripts/build-storage-12377.py
+    archive=$ROOT/build/storage-12377/libStorageUfs.a
     ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-force_load,$archive"
     ARCHIVE_DEPENDENCIES="$ARCHIVE_DEPENDENCIES $archive"
   fi

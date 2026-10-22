@@ -14,13 +14,14 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'refer/IOStorageFamily'
-REVISION = 'e45fbe30a7879e0b16e26dddb78538f1b00e0bff'
+REVISIONS = {'e45fbe30a7879e0b16e26dddb78538f1b00e0bff',
+             '7edb88fbae296fb7c8ce2f64e115e116e566d51c'}
 OUT = ROOT / 'build/storage-abi'
 
 if not (SOURCE / '.git').is_dir():
     raise SystemExit(f'Missing {SOURCE}; run "unixnu fetch IOStorageFamily" first')
 revision = subprocess.check_output(['git', '-C', SOURCE, 'rev-parse', 'HEAD'], text=True).strip()
-if revision != REVISION:
+if revision not in REVISIONS:
     raise SystemExit(f'Unexpected public IOStorageFamily revision: {revision}')
 
 headers = OUT / 'include/IOKit/storage'
