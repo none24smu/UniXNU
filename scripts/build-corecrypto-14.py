@@ -8,6 +8,7 @@ import concurrent.futures
 import argparse
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 import subprocess
@@ -24,6 +25,12 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--namespace', action='store_true', help='Isolate provider globals from XNU crypto wrappers')
 parser.add_argument('--xnu-12377', action='store_true', help='Use the iOS 26 build headers, ABI adapter and separate output')
 args = parser.parse_args()
+apfs_kpis = os.environ.get('XNU_APFS_CRYPTO_KPIS', '0')
+if apfs_kpis not in ('0', '1'):
+    raise SystemExit('XNU_APFS_CRYPTO_KPIS must be 0 or 1')
+apfs_kpis = apfs_kpis == '1'
+if apfs_kpis and not args.xnu_12377:
+    raise SystemExit('APFS crypto KPIs require the audited XNU 12377 digest ABI')
 if args.xnu_12377:
     OUT = ROOT / 'build/corecrypto-12377'
 deployment = '26.0' if args.xnu_12377 else '17.0'
@@ -99,6 +106,15 @@ sources = [resolve(objects[key]['fileRef']) for key in phase['files']
 for source in sources:
     if not source.is_file() or not source.resolve().is_relative_to(SOURCE.resolve()):
         raise SystemExit(f'Missing or unexpected source path: {source}')
+if apfs_kpis:
+    additions = [SOURCE / name for name in (
+        'cckeccak/src/cckeccak.c', 'ccsha3/src/ccsha3_initial_state.c',
+        'ccsha3/src/ccsha3_final.c', 'ccsha3/src/ccsha3_256_di.c',
+        'ccsha3/src/ccsha3_384_di.c', 'ccsha3/src/ccsha3_512_di.c')]
+    if any(not source.is_file() or source in sources for source in additions):
+        raise SystemExit('APFS digest source list changed')
+    sources += additions + [ROOT / 'scripts/apfs-crypto-compat.c',
+                            ROOT / 'scripts/apfs-crypto-selftest.c']
 include = OUT / 'include/corecrypto'
 include.mkdir(parents=True, exist_ok=True)
 for header in SOURCE.glob('*/corecrypto/*.h'):
@@ -143,7 +159,8 @@ object_dir.mkdir(exist_ok=True)
 
 
 def compile_one(source):
-    relative = str(source.relative_to(SOURCE))
+    relative = (str(source.relative_to(SOURCE)) if source.is_relative_to(SOURCE)
+                else str(source.relative_to(ROOT)))
     name = hashlib.sha256(relative.encode()).hexdigest()[:12] + '-' + source.stem
     destination = object_dir / (name + '.o')
     compile_source = source
@@ -155,6 +172,15 @@ def compile_one(source):
             raise SystemExit('Unexpected provider registration source')
         text = text.replace(definition, '#include "' + str(ROOT / 'scripts/corecrypto-12377-kpi.h') + '"\n\n' + definition)
         text = text.replace(registration, '    cc12377_complete_kpis(&kpis);\n' + registration)
+        if apfs_kpis:
+            # Additional known-answer checks follow the intact original POST
+            # and must pass before any consumer can register this provider.
+            declaration = 'extern int native_apfs_crypto_kpis_selftest(void);\n'
+            text = declaration + text
+            text = text.replace(registration,
+                '    if (native_apfs_crypto_kpis_selftest() != 0) {\n'
+                '        panic("source crypto: APFS digest selftest failed");\n'
+                '    }\n' + registration)
         compile_source = object_dir / 'corecrypto_kext-12377.c'
         compile_source.write_text(text)
     result = subprocess.run([*command, '-c', compile_source, '-o', destination], stdout=subprocess.PIPE,
@@ -171,6 +197,7 @@ report = {'source_url': 'https://github.com/ONLYA/corecrypto-2023', 'source_revi
           'provenance': 'Third-party source snapshot; not authenticated against an Apple archive',
           'module_version': '14.0', 'target': f'arm64-apple-ios{deployment}', 'assembly_enabled': False,
           'compiled_sources': len(results), 'failures': len(failed), 'objects': results,
+          'apfs_crypto_kpis': apfs_kpis,
           'kernel_provider_registered': False, 'crypto_selftests_passed': False}
 (OUT / f'build-report{variant}.json').write_text(json.dumps(report, indent=2) + '\n')
 print(f'{len(results)} kernel C sources; {len(failed)} failures', flush=True)
@@ -196,6 +223,12 @@ archive = OUT / f'libcorecrypto_kernel_noasm{variant}.a'
 archive.unlink(missing_ok=True)
 subprocess.run(['xcrun', 'ar', 'rcs', archive, *[object_dir / result['object'] for result in results]], check=True)
 defined = names(archive, '-U')
+if apfs_kpis:
+    required = {'_ccdigest_parallel', '_ccsha3_256_di', '_ccsha3_384_di',
+                '_ccsha3_512_di', '_native_apfs_crypto_kpis_selftest',
+                '_native_apfs_crypto_selftest_result'}
+    if not required <= defined:
+        raise SystemExit(f'Missing APFS crypto definitions: {sorted(required - defined)}')
 undefined = names(archive, '-u') - defined
 kernel_exports = current_kernel_names()
 survey = {'unresolved_external_names': sorted(undefined), 'missing_kernel_names': sorted(undefined - kernel_exports),

@@ -166,6 +166,11 @@ flag() {
   fi
   echo "$value"
 }
+APFS_CRYPTO_KPIS=$(flag XNU_APFS_CRYPTO_KPIS)
+if [ "$APFS_CRYPTO_KPIS" = 1 ] && [ "$SOURCE_CRYPTO" != 1 ]; then
+  echo 'XNU_APFS_CRYPTO_KPIS requires XNU_SOURCE_CORECRYPTO14=1' >&2
+  exit 1
+fi
 # rebuild_on_change NAME VALUE OBJECT...: make does not track per-object flags, so drop the objects when VALUE changes.
 rebuild_on_change() {
   local stamp=$OBJ/.$1 value=$2
@@ -261,6 +266,11 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
     CRYPTO_ARCHIVE=$ROOT/build/corecrypto-12377/libcorecrypto_kernel_noasm-namespaced.a
     ARCHIVE_FLAGS="$ARCHIVE_FLAGS $CRYPTO_ARCHIVE"
     ARCHIVE_DEPENDENCIES="$CRYPTO_ARCHIVE"
+    if [ "$APFS_CRYPTO_KPIS" = 1 ]; then
+      # These are runtime imports of the future APFS provider; archive
+      # membership alone does not retain otherwise unreferenced selectors.
+      ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-u,_ccdigest_parallel,-u,_ccsha3_256_di,-u,_ccsha3_384_di,-u,_ccsha3_512_di"
+    fi
   fi
   for component in ArmDTPlatform ArmCpu NativeDwc3Console; do
     if { [ "$component" = ArmDTPlatform ] && [ "$ARM_DT_PLATFORM" = 1 ]; } || \
@@ -289,6 +299,26 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
   rm -f "$OBJ/iokit/DEVELOPMENT/KernelConfigTables.cpo"
   rm -f "$OBJ/pexpert/DEVELOPMENT/pe_serial.o" "$OBJ/osfmk/DEVELOPMENT/rtclock.o"
   build_kernel "LD_KERNEL_ARCHIVES=$ARCHIVE_FLAGS" "XNU_EXTERNAL_KERNEL_ARCHIVES=$ARCHIVE_DEPENDENCIES"
+  if [ "$APFS_CRYPTO_KPIS" = 1 ]; then
+    python3 - "$OBJ/mach.development.bcm2837.unstripped.noctf" <<'PY'
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+kernel = Path(sys.argv[1])
+defined = set(subprocess.check_output(['xcrun', 'nm', '-g', '-U', '-j', kernel], text=True).splitlines())
+required = {'_ccdigest_parallel', '_ccsha3_256_di', '_ccsha3_384_di',
+            '_ccsha3_512_di', '_native_apfs_crypto_kpis_selftest',
+            '_native_apfs_crypto_selftest_result'}
+missing = sorted(required - defined)
+kernel.with_suffix('.apfs-crypto.json').write_text(json.dumps({
+    'required_definitions': sorted(required), 'missing': missing,
+    'runtime_selftest_passed': False}, indent=2) + '\n')
+if missing:
+    raise SystemExit(f'Final kernel omitted APFS crypto definitions: {missing}')
+PY
+  fi
   if [ "$SOURCE_CRYPTO" = 1 ]; then
     python3 scripts/seal-source-crypto-kernel.py --static-if-defaults "$OBJ/mach.development.bcm2837.unstripped.noctf"
   fi
