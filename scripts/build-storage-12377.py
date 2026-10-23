@@ -84,6 +84,11 @@ sources = [exported_source(name) for name in (
     'IOApplePartitionScheme', 'IOAppleLabelScheme', 'IOFilterScheme')]
 sources += [patched, UFS / 'NativeUfs.cpp']
 verified = os.environ.get('XNU_NATIVE_UFS_VERIFIED_ROOT') == '1'
+owner_root = os.environ.get('XNU_NATIVE_UFS_OWNER_ROOT', '0')
+if owner_root not in ('0', '1') or (owner_root == '1' and not verified):
+    raise SystemExit('Owner root binding requires the real verified UFS backend')
+if owner_root == '1':
+    sources.append(ROOT / 'scripts/ufs-owner-root.cpp')
 extra = []
 if verified:
     anchor = ROOT / 'scripts/zeta-owner-root-key.h'
@@ -162,7 +167,8 @@ missing = sorted(imports - kernel - {'___dso_handle'})
 report = {'source_revision': REVISION, 'objects': len(objects),
           'ordinary_arm64_ios26_audited': True, 'native_kernel_backend_only': True,
           'sm8350_stream_id': 0xe0, 'kernel_collisions': collisions,
-          'missing_kernel_imports': missing, 'hardware_qualified': False, 'owner_policy_from_ufs': verified, 'progress_observer_compiled': False,
+          'missing_kernel_imports': missing, 'hardware_qualified': False, 'owner_policy_from_ufs': verified,
+          'owner_mounted_root_binding': owner_root == '1', 'progress_observer_compiled': False,
           'native_driver_sha256': hashlib.sha256(patched.read_bytes()).hexdigest()}
 (OUT / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
 if collisions or missing:

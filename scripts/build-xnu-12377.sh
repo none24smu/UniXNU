@@ -239,6 +239,14 @@ rebuild_on_change platform-personalities "$ARM_DT_PLATFORM:$ARMCPU" iokit/DEVELO
 NATIVE_DWC3_CONSOLE=$(flag XNU_NATIVE_DWC3_CONSOLE)
 SOURCE_PTHREAD=$(flag XNU_SOURCE_PTHREAD)
 NATIVE_UFS_SM8350=$(flag XNU_NATIVE_UFS_SM8350)
+UFS_OWNER_ROOT=$(flag XNU_NATIVE_UFS_OWNER_ROOT)
+UFS_VERIFIED_ROOT=$(flag XNU_NATIVE_UFS_VERIFIED_ROOT)
+if [ "$UFS_OWNER_ROOT" = 1 ] && { [ "$NATIVE_UFS_SM8350" != 1 ] || [ "$UFS_VERIFIED_ROOT" != 1 ] || [ "$SOURCE_CRYPTO" != 1 ]; }; then
+  echo 'Owner root binding requires SM8350 UFS, signed block verification and source crypto' >&2
+  exit 1
+fi
+EXTRA_MAKE_ARGS+=("bsd_init.o_CFLAGS_ADD=-DXNU_NATIVE_UFS_OWNER_ROOT=$UFS_OWNER_ROOT")
+rebuild_on_change ufs-owner-root-mode "$UFS_OWNER_ROOT" bsd/DEVELOPMENT/kern/bsd_init.o
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_UFS_SM8350=$NATIVE_UFS_SM8350"
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_DWC3_CONSOLE=$NATIVE_DWC3_CONSOLE"
 rebuild_on_change native-dwc3-console "$NATIVE_DWC3_CONSOLE" pexpert/DEVELOPMENT/pe_serial.o osfmk/DEVELOPMENT/rtclock.o
@@ -273,7 +281,8 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
   # Bootstrap references are enabled only after the provider archive exists.
   rm -f "$OBJ/osfmk/DEVELOPMENT/prng_random.o" "$OBJ/pexpert/DEVELOPMENT/pe_init.o"
   rm -f "$OBJ/pexpert/DEVELOPMENT/pe_serial.o" "$OBJ/osfmk/DEVELOPMENT/rtclock.o"
-  build_kernel CFLAGS_EXTRA="$EXTRA_CFLAGS -UXNU_SOURCE_CORECRYPTO14 -UXNU_ARM_DT_PLATFORM -UXNU_ARMCPU -UXNU_NATIVE_DWC3_CONSOLE"
+  build_kernel CFLAGS_EXTRA="$EXTRA_CFLAGS -UXNU_SOURCE_CORECRYPTO14 -UXNU_ARM_DT_PLATFORM -UXNU_ARMCPU -UXNU_NATIVE_DWC3_CONSOLE" \
+    "bsd_init.o_CFLAGS_ADD=-DXNU_NATIVE_UFS_OWNER_ROOT=0"
   ARCHIVE_FLAGS="-L$FAKEROOT/usr/local/lib/kernel -lfirehose_kernel"
   ARCHIVE_DEPENDENCIES=""
   if [ "$SOURCE_CRYPTO" = 1 ]; then
@@ -323,6 +332,11 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
   rm -f "$OBJ/osfmk/DEVELOPMENT/prng_random.o" "$OBJ/pexpert/DEVELOPMENT/pe_init.o"
   rm -f "$OBJ/iokit/DEVELOPMENT/KernelConfigTables.cpo"
   rm -f "$OBJ/pexpert/DEVELOPMENT/pe_serial.o" "$OBJ/osfmk/DEVELOPMENT/rtclock.o"
+  if [ "$UFS_OWNER_ROOT" = 1 ]; then
+    # The first pass must not reference an archive that has not been built.
+    # Recompile the callsite only after the actual owner binding exists.
+    rm -f "$OBJ/bsd/DEVELOPMENT/kern/bsd_init.o"
+  fi
   build_kernel "LD_KERNEL_ARCHIVES=$ARCHIVE_FLAGS" "XNU_EXTERNAL_KERNEL_ARCHIVES=$ARCHIVE_DEPENDENCIES"
   if [ "$APFS_CRYPTO_KPIS" = 1 ]; then
     python3 - "$OBJ/mach.development.bcm2837.unstripped.noctf" <<'PY'
@@ -344,6 +358,8 @@ if os.environ.get('XNU_APFS_MLDSA') == '1':
                  '_zeta_mldsa26_native_apfs_mldsa_selftest_result'}
 if os.environ.get('XNU_APFS_CSR') == '1':
     required.add('_csr_check')
+if os.environ.get('XNU_NATIVE_UFS_OWNER_ROOT') == '1':
+    required |= {'_native_ufs_owner_root_authorized', '_native_ufs_owner_root_accepted'}
 missing = sorted(required - defined)
 kernel.with_suffix('.apfs-crypto.json').write_text(json.dumps({
     'required_definitions': sorted(required), 'missing': missing,

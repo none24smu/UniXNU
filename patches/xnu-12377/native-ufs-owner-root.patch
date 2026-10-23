@@ -1,0 +1,28 @@
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -947,7 +947,25 @@
+ 		if (require_rootauth) {
+ 			/* enforce sealedness */
+ 			int autherr = VNOP_IOCTL(rootvnode, FSIOC_KERNEL_ROOTAUTH, NULL, 0, vfs_context_kernel());
++			int owner_authorized = 0;
++#if defined(XNU_NATIVE_UFS_OWNER_ROOT) && XNU_NATIVE_UFS_OWNER_ROOT
++#if !DEVELOPMENT && !DEBUG
++#error The owner UFS root policy requires a development kernel
++#endif
+ 			if (autherr) {
++				extern int native_ufs_owner_root_authorized(dev_t, dev_t, int);
++				mount_t root_mount = vnode_mount(rootvnode);
++				vnode_t device_vnode = vfs_devvp(root_mount);
++				dev_t device = device_vnode ? vnode_specrdev(device_vnode) : NODEV;
++				int readonly = (vfs_flags(root_mount) & MNT_RDONLY) != 0;
++				owner_authorized = device_vnode &&
++				    native_ufs_owner_root_authorized(device, rootdev, readonly);
++				if (device_vnode) vnode_put(device_vnode);
++				printf("OwnerRoot: apple_autherr=%d device=%u:%u selected=%u:%u readonly=%d owner=%d\n",
++				    autherr, major(device), minor(device), major(rootdev), minor(rootdev), readonly, owner_authorized);
++			}
++#endif
++			if (autherr && !owner_authorized) {
+ 				panic("rootvp not authenticated after mounting");
+ 			}
+ 		}
