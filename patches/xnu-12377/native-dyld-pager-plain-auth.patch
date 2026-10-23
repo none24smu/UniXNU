@@ -1,0 +1,77 @@
+--- a/osfmk/vm/vm_dyld_pager.c
++++ b/osfmk/vm/vm_dyld_pager.c
+@@ -60,8 +60,9 @@
+ 
+ #include <sys/kdebug_triage.h>
+ #include <mach-o/fixup-chains.h>
+-#if defined(HAS_APPLE_PAC)
++/* The pointer format and key names are needed without pointer authentication too (see signPointer). */
+ #include <ptrauth.h>
++#if defined(HAS_APPLE_PAC)
+ #include <arm/misc_protos.h>
+ #endif /* defined(HAS_APPLE_PAC) */
+ 
+@@ -557,7 +558,6 @@ fixupPage32(
+ 	return KERN_SUCCESS;
+ }
+ 
+-#if defined(HAS_APPLE_PAC)
+ /*
+  * Sign a pointer needed for fixups.
+  */
+@@ -577,19 +577,31 @@ signPointer(
+ 		return KERN_SUCCESS;
+ 	}
+ 
++#if defined(HAS_APPLE_PAC)
+ 	uint64_t extendedDiscriminator = diversity;
+ 	if (addrDiv) {
+ 		extendedDiscriminator = __builtin_ptrauth_blend_discriminator(loc, extendedDiscriminator);
+ 	}
++#else /* defined(HAS_APPLE_PAC) */
++	(void)loc;
++	(void)addrDiv;
++	(void)diversity;
++	(void)pager;
++#endif /* defined(HAS_APPLE_PAC) */
+ 
+ 	switch (key) {
+ 	case ptrauth_key_asia:
+ 	case ptrauth_key_asda:
++#if defined(HAS_APPLE_PAC)
+ 		if (pager->dyld_a_key == 0 || arm_user_jop_disabled()) {
+ 			*signedAddr = unsignedAddr;
+ 		} else {
+ 			*signedAddr = (uintptr_t)pmap_sign_user_ptr((void *)unsignedAddr, key, extendedDiscriminator, pager->dyld_a_key);
+ 		}
++#else /* defined(HAS_APPLE_PAC) */
++		/* Without pointer authentication the user ABI has plain pointers (zeta lowers arm64e code offline): store the unsigned target. */
++		*signedAddr = unsignedAddr;
++#endif /* defined(HAS_APPLE_PAC) */
+ 		break;
+ 
+ 	default:
+@@ -813,7 +825,6 @@ fixupCachePageAuth64(
+ 	} while (valid_chain);
+ 	return KERN_SUCCESS;
+ }
+-#endif /* defined(HAS_APPLE_PAC) */
+ 
+ 
+ /*
+@@ -922,7 +933,6 @@ fixup_page(
+ 	 * Route to the appropriate fixup routine
+ 	 */
+ 	switch (hdr->mwli_pointer_format) {
+-#if defined(HAS_APPLE_PAC)
+ 	case DYLD_CHAINED_PTR_ARM64E:
+ 		fixupPageAuth64(userVA, contents, pager, segInfo, pageIndex, false);
+ 		break;
+@@ -933,7 +943,6 @@ fixup_page(
+ 	case DYLD_CHAINED_PTR_ARM64E_SHARED_CACHE:
+ 		fixupCachePageAuth64(userVA, contents, pager, segInfo, pageIndex);
+ 		break;
+-#endif /* defined(HAS_APPLE_PAC) */
+ 	case DYLD_CHAINED_PTR_64:
+ 		fixupPage64(userVA, contents, link_info, segInfo, pageIndex, false);
+ 		break;
