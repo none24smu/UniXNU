@@ -29,6 +29,10 @@ apfs_kpis = os.environ.get('XNU_APFS_CRYPTO_KPIS', '0')
 if apfs_kpis not in ('0', '1'):
     raise SystemExit('XNU_APFS_CRYPTO_KPIS must be 0 or 1')
 apfs_kpis = apfs_kpis == '1'
+apfs_mldsa = os.environ.get('XNU_APFS_MLDSA', '0')
+if apfs_mldsa not in ('0', '1') or (apfs_mldsa == '1' and not apfs_kpis):
+    raise SystemExit('XNU_APFS_MLDSA must be 0 or 1 and requires APFS crypto KPIs')
+apfs_mldsa = apfs_mldsa == '1'
 if apfs_kpis and not args.xnu_12377:
     raise SystemExit('APFS crypto KPIs require the audited XNU 12377 digest ABI')
 if args.xnu_12377:
@@ -186,6 +190,14 @@ def compile_one(source):
             text = text.replace(registration,
                 '    if (native_apfs_crypto_kpis_selftest() != 0) {\n'
                 '        panic("source crypto: APFS digest selftest failed");\n'
+                '    }\n' + registration)
+        if apfs_mldsa:
+            # This bootstrap runs after InitIOKit; the real kernel allocator
+            # already serves the original provider's intact FIPS POST.
+            text = 'extern int zeta_mldsa26_native_apfs_mldsa_selftest(void);\n' + text
+            text = text.replace(registration,
+                '    if (zeta_mldsa26_native_apfs_mldsa_selftest() != 0) {\n'
+                '        panic("source crypto: APFS ML-DSA selftest failed");\n'
                 '    }\n' + registration)
         compile_source = object_dir / 'corecrypto_kext-12377.c'
         compile_source.write_text(text)

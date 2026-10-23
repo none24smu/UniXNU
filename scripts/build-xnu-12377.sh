@@ -181,6 +181,11 @@ if [ "$APFS_CRYPTO_KPIS" = 1 ] && [ "$SOURCE_CRYPTO" != 1 ]; then
   echo 'XNU_APFS_CRYPTO_KPIS requires XNU_SOURCE_CORECRYPTO14=1' >&2
   exit 1
 fi
+APFS_MLDSA=$(flag XNU_APFS_MLDSA)
+if [ "$APFS_MLDSA" = 1 ] && [ "$APFS_CRYPTO_KPIS" != 1 ]; then
+  echo 'XNU_APFS_MLDSA requires XNU_APFS_CRYPTO_KPIS=1' >&2
+  exit 1
+fi
 # rebuild_on_change NAME VALUE OBJECT...: make does not track per-object flags, so drop the objects when VALUE changes.
 rebuild_on_change() {
   local stamp=$OBJ/.$1 value=$2
@@ -272,6 +277,9 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
   ARCHIVE_FLAGS="-L$FAKEROOT/usr/local/lib/kernel -lfirehose_kernel"
   ARCHIVE_DEPENDENCIES=""
   if [ "$SOURCE_CRYPTO" = 1 ]; then
+    if [ "$APFS_MLDSA" = 1 ]; then
+      python3 scripts/build-apfs-mldsa-12377.py
+    fi
     python3 scripts/build-corecrypto-14.py --xnu-12377
     python3 scripts/build-corecrypto-14.py --xnu-12377 --namespace
     CRYPTO_ARCHIVE=$ROOT/build/corecrypto-12377/libcorecrypto_kernel_noasm-namespaced.a
@@ -282,6 +290,11 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
       # membership alone does not retain otherwise unreferenced selectors.
       ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-u,_ccdigest_parallel,-u,_ccsha3_256_di,-u,_ccsha3_384_di,-u,_ccsha3_512_di"
       ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-u,_ccec_import_pub,-u,_ccrsa_import_pub,-u,_ccrsa_verify_pkcs1v15_allowshortsigs"
+    fi
+    if [ "$APFS_MLDSA" = 1 ]; then
+      MLDSA_ARCHIVE=$ROOT/build/apfs-mldsa-12377/libapfs_mldsa_namespaced.a
+      ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-u,_ccmldsa87,-u,_ccmldsa_import_pubkey,-u,_ccmldsa_verify $MLDSA_ARCHIVE"
+      ARCHIVE_DEPENDENCIES="$ARCHIVE_DEPENDENCIES $MLDSA_ARCHIVE"
     fi
   fi
   for component in ArmDTPlatform ArmCpu NativeDwc3Console; do
@@ -314,6 +327,7 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
   if [ "$APFS_CRYPTO_KPIS" = 1 ]; then
     python3 - "$OBJ/mach.development.bcm2837.unstripped.noctf" <<'PY'
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -324,6 +338,12 @@ required = {'_ccdigest_parallel', '_ccsha3_256_di', '_ccsha3_384_di',
             '_ccsha3_512_di', '_native_apfs_crypto_kpis_selftest',
             '_native_apfs_crypto_selftest_result', '_ccec_import_pub',
             '_ccrsa_import_pub', '_ccrsa_verify_pkcs1v15_allowshortsigs'}
+if os.environ.get('XNU_APFS_MLDSA') == '1':
+    required |= {'_ccmldsa87', '_ccmldsa_import_pubkey', '_ccmldsa_verify',
+                 '_zeta_mldsa26_native_apfs_mldsa_selftest',
+                 '_zeta_mldsa26_native_apfs_mldsa_selftest_result'}
+if os.environ.get('XNU_APFS_CSR') == '1':
+    required.add('_csr_check')
 missing = sorted(required - defined)
 kernel.with_suffix('.apfs-crypto.json').write_text(json.dumps({
     'required_definitions': sorted(required), 'missing': missing,
