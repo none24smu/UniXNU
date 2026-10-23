@@ -233,6 +233,12 @@ PROC_TRACE_CONSOLE=$(flag XNU_PROC_TRACE_CONSOLE)
 EXTRA_MAKE_ARGS+=("kern_exec.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE")
 EXTRA_MAKE_ARGS+=("kern_exit.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE")
 rebuild_on_change proc-trace-console-mode "$PROC_TRACE_CONSOLE" bsd/DEVELOPMENT/kern/kern_exec.o bsd/DEVELOPMENT/kern/kern_exit.o
+# vfs.generic.apfs.edt_fstab from the device tree's /filesystems/fstab: getfsent() reads only this on an APFS root,
+# and the KDK APFS kext does not provide it.
+EDT_FSTAB=$(flag XNU_EDT_FSTAB)
+EXTRA_MAKE_ARGS+=("vfs_subr.o_CFLAGS_ADD=-DXNU_EDT_FSTAB=$EDT_FSTAB")
+EXTRA_MAKE_ARGS+=("kern_newsysctl.o_CFLAGS_ADD=-DXNU_EDT_FSTAB=$EDT_FSTAB")
+rebuild_on_change edt-fstab-mode "$EDT_FSTAB" bsd/DEVELOPMENT/vfs/vfs_subr.o bsd/DEVELOPMENT/kern/kern_newsysctl.o
 if [ "$SOURCE_CRYPTO" = 1 ]; then
   EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_SOURCE_CORECRYPTO14=1"
 fi
