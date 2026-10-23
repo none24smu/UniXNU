@@ -127,6 +127,8 @@ def compile_one(source, record):
                 '-I', str(UFS),
                 '-DNATIVE_UFS_SM8350=1', '-DIOSTORAGE_NATIVE_ONLY=1',
                 '-DNATIVE_UFS_PROGRESS_OBSERVER=0',
+                # The kernel has no ___chkstk_darwin; NativeRamBlock's store header check has an 8 KiB frame.
+                '-fno-stack-check',
                 '-Wall', '-Wextra', '-Wno-unused-parameter', '-Wno-deprecated-declarations',
                 '-Wno-c99-designator', '-Wno-reorder-init-list']
     destination.with_suffix('.command.json').write_text(json.dumps(command, indent=2) + '\n')
