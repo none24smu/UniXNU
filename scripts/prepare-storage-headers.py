@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+from kdk_iokit_abi import enabled, storage_copy
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'refer/IOStorageFamily'
@@ -27,9 +28,12 @@ if revision not in REVISIONS:
 headers = OUT / 'include/IOKit/storage'
 headers.mkdir(parents=True, exist_ok=True)
 copied = {}
+compatibility = enabled()
+if compatibility and revision != '7edb88fbae296fb7c8ce2f64e115e116e566d51c':
+    raise SystemExit('KDK IOKit ABI profile requires IOStorageFamily 337.100.1')
 for path in sorted(SOURCE.glob('*.h')):
     target = headers / path.name
-    shutil.copyfile(path, target)
+    target.write_text(storage_copy(path.name, path.read_text(), compatibility))
     copied[path.name] = hashlib.sha256(target.read_bytes()).hexdigest()
 if not copied:
     raise SystemExit('IOStorageFamily has no public headers')
@@ -39,7 +43,7 @@ conditions = sdk / 'usr/include/TargetConditionals.h'
 target = OUT / 'include/TargetConditionals.h'
 shutil.copyfile(conditions, target)
 
-report = dict(source_revision=revision, headers=copied,
+report = dict(source_revision=revision, headers=copied, kdk_iokit_abi=compatibility,
               target_conditionals_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
               qualification=False)
 (OUT / 'headers.json').write_text(json.dumps(report, indent=2) + '\n')

@@ -13,6 +13,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from xnu_symbols import kernel_names
+from kdk_iokit_abi import enabled, storage_copy
 
 SOURCE = ROOT / 'refer/IOStorageFamily'
 REVISION = '7edb88fbae296fb7c8ce2f64e115e116e566d51c'
@@ -41,7 +42,15 @@ record = json.loads((OBJ / 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json').read_t
 # DriverKit is a separate user-driver backend requiring generated IIG RPC
 # classes. This build links native kernel block devices. Keep the public
 # reference immutable and retain the complete ordinary block-storage path.
-driver = (SOURCE / 'IOBlockStorageDriver.cpp').read_text()
+compatibility = enabled()
+print(f'Storage 12377: KDK IOKit ABI profile={int(compatibility)}; iOS target retained', flush=True)
+recorded_profiles = [arg.split('=', 1)[1] for arg in record['arguments'] if arg.startswith('-DXNU_KDK_IOKIT_ABI=')]
+if recorded_profiles not in ([], ['0'], ['1']) or (recorded_profiles == ['1']) != compatibility:
+    raise SystemExit('Storage ABI profile differs from recorded kernel compile flags')
+headers = json.loads((ROOT / 'build/storage-abi/headers.json').read_text())
+if headers.get('kdk_iokit_abi', False) != compatibility:
+    raise SystemExit('Storage headers and source ABI profiles differ')
+driver = storage_copy('IOBlockStorageDriver.cpp', (SOURCE / 'IOBlockStorageDriver.cpp').read_text(), compatibility)
 old = '#include "IOUserBlockStorageDevice_kext.h"'
 assert driver.count(old) == 1
 driver = driver.replace(old, '#if !IOSTORAGE_NATIVE_ONLY\n' + old + '\n#endif')
@@ -61,7 +70,17 @@ driver = driver.replace(old, '''#if IOSTORAGE_NATIVE_ONLY
     {''')
 patched = OUT / 'IOBlockStorageDriver.cpp'
 patched.write_text(driver)
-sources = [SOURCE / (name + '.cpp') for name in (
+def exported_source(name):
+    source = SOURCE / (name + '.cpp')
+    text = source.read_text()
+    adapted = storage_copy(source.name, text, compatibility)
+    if adapted == text:
+        return source
+    target = OUT / source.name
+    target.write_text(adapted)
+    return target
+
+sources = [exported_source(name) for name in (
     'IOStorage', 'IOBlockStorageDevice', 'IOMedia', 'IOMediaBSDClient',
     'IOPartitionScheme', 'IOGUIDPartitionScheme', 'IOFDiskPartitionScheme',
     'IOApplePartitionScheme', 'IOAppleLabelScheme', 'IOFilterScheme')]

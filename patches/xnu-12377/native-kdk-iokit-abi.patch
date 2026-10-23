@@ -1,0 +1,27 @@
+--- a/libkern/libkern/c++/OSMetaClass.h
++++ b/libkern/libkern/c++/OSMetaClass.h
+@@ -160,6 +160,15 @@
+ /*! @parseOnly */
+ #define APPLE_KEXT_COMPATIBILITY
+ 
++// An explicit whole-kernel IOKit ABI experiment. All source providers must use
++// the same profile. Keep the iOS target and its policy/syscall configuration.
++#if defined(XNU_KDK_IOKIT_ABI) && XNU_KDK_IOKIT_ABI
++#if !defined(__arm64__)
++#error XNU_KDK_IOKIT_ABI requires ARM64
++#endif
++#define APPLE_KEXT_VTABLE_PADDING       1
++#define APPLE_KEXT_ALIGN_CONTAINERS     1
++#else
+ #ifdef XNU_KERNEL_PRIVATE
+ 
+ #if !XNU_TARGET_OS_OSX
+@@ -197,6 +206,8 @@
+ #endif /* TARGET_OS_OSX && defined(__arm64__) */
+ 
+ #endif /* XNU_KERNEL_PRIVATE */
++
++#endif /* XNU_KDK_IOKIT_ABI */
+ 
+ #if defined(__LP64__)
+ /*! @parseOnly */

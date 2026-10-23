@@ -87,6 +87,24 @@ for header in Path('refer/libdispatch/os').glob('*.h'):
         target.write_bytes(result.stdout)
 PY
 
+# C++ ABI changes invalidate every kernel object, not selected methods only.
+# Keep generated SDK headers and provider compile records on the same profile.
+KDK_IOKIT_ABI=${XNU_KDK_IOKIT_ABI:-0}
+if [ "$KDK_IOKIT_ABI" != 0 ] && [ "$KDK_IOKIT_ABI" != 1 ]; then
+  echo 'XNU_KDK_IOKIT_ABI must be 0 or 1' >&2
+  exit 1
+fi
+mkdir -p "$OUT"
+ABI_PROFILE="iokit-abi-v1:$KDK_IOKIT_ABI"
+if [ "$(cat "$OUT/.iokit-abi-profile" 2>/dev/null || true)" != "$ABI_PROFILE" ]; then
+  rm -rf "$OUT/ios-obj" "$OUT/ios-sym" "$OUT/ios-dst" "$OUT/hdrs-obj" "$OUT/hdrs-sym"
+  rm -f "$FAKEROOT/.xnu-$XNU_VERSION-headers"
+  printf '%s\n' "$ABI_PROFILE" > "$OUT/.iokit-abi-profile"
+fi
+if [ "${XNU_NATIVE_UFS_SM8350:-0}" = 1 ]; then
+  python3 scripts/prepare-storage-headers.py
+fi
+
 if [ ! -f "$FAKEROOT/.xnu-$XNU_VERSION-headers" ]; then
   make -C "$WORK" installhdrs SDKROOT=macosx ARCH_CONFIGS=ARM64 \
     MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \
@@ -130,6 +148,7 @@ PY
 fi
 
 EXTRA_CFLAGS=${XNU_EXTRA_CFLAGS:--Wno-reserved-identifier -Wno-pre-c11-compat -Wno-missing-designated-field-initializers -Wno-suggest-override -Wno-unnecessary-virtual-specifier -Wno-suggest-destructor-override -Wno-ms-bitfield-padding}
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_KDK_IOKIT_ABI=$KDK_IOKIT_ABI"
 EXTRA_MAKE_ARGS=()
 OBJ=$OUT/ios-obj/DEVELOPMENT_ARM64_BCM2837
 SOURCE_CRYPTO=${XNU_SOURCE_CORECRYPTO14:-0}
