@@ -231,7 +231,37 @@ rebuild_on_change dyld-flags-bootarg-mode "$DYLD_FLAGS_BOOTARG" osfmk/DEVELOPMEN
 # Print every exec, spawn, exit and user hardware exception on the console, for a userland that has no log
 # daemon or crash reporter yet.
 PROC_TRACE_CONSOLE=$(flag XNU_PROC_TRACE_CONSOLE)
-EXTRA_MAKE_ARGS+=("kern_exec.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE")
+# The Data seed (UniXNU NativeRamBlock) and its kernel mount at /private/var before launchd
+# (native_owner_data_prepare of offline-owner-systemos-mount, patches/xnu-12377/native-owner-data-mount.patch).
+NATIVE_RAM_BLOCK=$(flag XNU_NATIVE_RAM_BLOCK)
+OWNER_DATA_MOUNT=$(flag XNU_OWNER_DATA_MOUNT)
+if [ "$NATIVE_RAM_BLOCK" = 1 ] && [ "$(flag XNU_NATIVE_UFS_SM8350)" != 1 ]; then
+  echo 'NativeRamBlock builds with the native storage family and its store window (XNU_NATIVE_UFS_SM8350)' >&2
+  exit 1
+fi
+if [ "$OWNER_DATA_MOUNT" = 1 ] && [ "$NATIVE_RAM_BLOCK" != 1 ]; then
+  echo 'XNU_OWNER_DATA_MOUNT mounts the NativeRamBlock seed (XNU_NATIVE_RAM_BLOCK)' >&2
+  exit 1
+fi
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_RAM_BLOCK=$NATIVE_RAM_BLOCK"
+rebuild_on_change native-ram-block-mode "$NATIVE_RAM_BLOCK" iokit/DEVELOPMENT/KernelConfigTables.cpo
+OWNER_DATA_HEADER=$OUT/owner-data-volume.h
+mkdir -p "$OUT"
+python3 - "$OWNER_DATA_HEADER" "$OWNER_DATA_MOUNT" "${XNU_OWNER_DATA_VOLUME_UUID:-}" <<'PY_DATA_UUID'
+import re
+import sys
+from pathlib import Path
+path, mode, value = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+text = ''
+if mode == '1':
+    if not re.fullmatch(r'[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}', value):
+        raise SystemExit('Set XNU_OWNER_DATA_VOLUME_UUID to the Data seed volume UUID (upper-case)')
+    text = '#define XNU_OWNER_DATA_VOLUME_UUID "' + value + '"\n'
+if not path.exists() or path.read_text() != text:
+    path.write_text(text)
+PY_DATA_UUID
+rebuild_on_change owner-data-mount-mode "$OWNER_DATA_MOUNT:$NATIVE_RAM_BLOCK:${XNU_OWNER_DATA_VOLUME_UUID:-}" bsd/DEVELOPMENT/kern/kern_exec.o
+EXTRA_MAKE_ARGS+=("kern_exec.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE -DXNU_OWNER_DATA_MOUNT=$OWNER_DATA_MOUNT -DXNU_NATIVE_RAM_BLOCK=$NATIVE_RAM_BLOCK -include $OWNER_DATA_HEADER")
 EXTRA_MAKE_ARGS+=("kern_exit.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE")
 EXTRA_MAKE_ARGS+=("exception.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE")
 rebuild_on_change proc-trace-console-mode "$PROC_TRACE_CONSOLE" bsd/DEVELOPMENT/kern/kern_exec.o bsd/DEVELOPMENT/kern/kern_exit.o \
