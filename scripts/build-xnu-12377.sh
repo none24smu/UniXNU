@@ -260,24 +260,24 @@ if mode == '1':
 if not path.exists() or path.read_text() != text:
     path.write_text(text)
 PY_DATA_UUID
-rebuild_on_change owner-data-mount-mode "$OWNER_DATA_MOUNT:$NATIVE_RAM_BLOCK:${XNU_OWNER_DATA_VOLUME_UUID:-}" bsd/DEVELOPMENT/kern/kern_exec.o
+rebuild_on_change owner-data-mount-mode "$OWNER_DATA_MOUNT:$NATIVE_RAM_BLOCK:${XNU_OWNER_DATA_VOLUME_UUID:-}" bsd/DEVELOPMENT/kern_exec.o
 EXTRA_MAKE_ARGS+=("kern_exec.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE -DXNU_OWNER_DATA_MOUNT=$OWNER_DATA_MOUNT -DXNU_NATIVE_RAM_BLOCK=$NATIVE_RAM_BLOCK -include $OWNER_DATA_HEADER")
 EXTRA_MAKE_ARGS+=("kern_exit.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE")
 EXTRA_MAKE_ARGS+=("exception.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE")
-rebuild_on_change proc-trace-console-mode "$PROC_TRACE_CONSOLE" bsd/DEVELOPMENT/kern/kern_exec.o bsd/DEVELOPMENT/kern/kern_exit.o \
+rebuild_on_change proc-trace-console-mode "$PROC_TRACE_CONSOLE" bsd/DEVELOPMENT/kern_exec.o bsd/DEVELOPMENT/kern_exit.o \
   osfmk/DEVELOPMENT/exception.o
 # vfs.generic.apfs.edt_fstab from the device tree's /filesystems/fstab: getfsent() reads only this on an APFS root,
 # and the KDK APFS kext does not provide it.
 EDT_FSTAB=$(flag XNU_EDT_FSTAB)
 EXTRA_MAKE_ARGS+=("vfs_subr.o_CFLAGS_ADD=-DXNU_EDT_FSTAB=$EDT_FSTAB")
 EXTRA_MAKE_ARGS+=("kern_newsysctl.o_CFLAGS_ADD=-DXNU_EDT_FSTAB=$EDT_FSTAB")
-rebuild_on_change edt-fstab-mode "$EDT_FSTAB" bsd/DEVELOPMENT/vfs/vfs_subr.o bsd/DEVELOPMENT/kern/kern_newsysctl.o
+rebuild_on_change edt-fstab-mode "$EDT_FSTAB" bsd/DEVELOPMENT/vfs_subr.o bsd/DEVELOPMENT/kern_newsysctl.o
 # The boot progress layer (UniXNU zzz-boot-progress, library from the device package as kits/<kit>): diagnostic page,
 # checkpoints and the user fault probe. The hooks compile in once the library exists, after the first pass.
 BOOT_PROGRESS=$(flag XNU_BOOT_PROGRESS)
 BOOT_PROGRESS_OBJECTS="osfmk/DEVELOPMENT/arm_init.o osfmk/DEVELOPMENT/startup.o osfmk/DEVELOPMENT/video_console.o
-  osfmk/DEVELOPMENT/serial_console.o osfmk/DEVELOPMENT/sleh.o bsd/DEVELOPMENT/kern/bsd_init.o bsd/DEVELOPMENT/kern/kern_exec.o
-  bsd/DEVELOPMENT/kern/kern_exit.o pexpert/DEVELOPMENT/pe_kprintf.o"
+  osfmk/DEVELOPMENT/serial_console.o osfmk/DEVELOPMENT/sleh.o bsd/DEVELOPMENT/bsd_init.o bsd/DEVELOPMENT/kern_exec.o
+  bsd/DEVELOPMENT/kern_exit.o pexpert/DEVELOPMENT/pe_kprintf.o"
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOOT_PROGRESS=$BOOT_PROGRESS"
 # shellcheck disable=SC2086
 rebuild_on_change boot-progress-mode "$BOOT_PROGRESS" $BOOT_PROGRESS_OBJECTS
@@ -303,7 +303,7 @@ if [ "$UFS_OWNER_ROOT" = 1 ] && { [ "$NATIVE_UFS_SM8350" != 1 ] || [ "$UFS_VERIF
   exit 1
 fi
 EXTRA_MAKE_ARGS+=("bsd_init.o_CFLAGS_ADD=-DXNU_NATIVE_UFS_OWNER_ROOT=$UFS_OWNER_ROOT")
-rebuild_on_change ufs-owner-root-mode "$UFS_OWNER_ROOT" bsd/DEVELOPMENT/kern/bsd_init.o
+rebuild_on_change ufs-owner-root-mode "$UFS_OWNER_ROOT" bsd/DEVELOPMENT/bsd_init.o
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_UFS_SM8350=$NATIVE_UFS_SM8350"
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_DWC3_CONSOLE=$NATIVE_DWC3_CONSOLE"
 rebuild_on_change native-dwc3-console "$NATIVE_DWC3_CONSOLE" pexpert/DEVELOPMENT/pe_serial.o osfmk/DEVELOPMENT/rtclock.o
@@ -407,11 +407,11 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
   if [ "$UFS_OWNER_ROOT" = 1 ]; then
     # The first pass must not reference an archive that has not been built.
     # Recompile the callsite only after the actual owner binding exists.
-    rm -f "$OBJ/bsd/DEVELOPMENT/kern/bsd_init.o"
+    rm -f "$OBJ/bsd/DEVELOPMENT/bsd_init.o"
   fi
   if [ "$OWNER_DATA_MOUNT" = 1 ]; then
     # The Data mount calls NativeRamBlock, which links from the storage archive.
-    rm -f "$OBJ/bsd/DEVELOPMENT/kern/kern_exec.o"
+    rm -f "$OBJ/bsd/DEVELOPMENT/kern_exec.o"
   fi
   build_kernel "LD_KERNEL_ARCHIVES=$ARCHIVE_FLAGS" "XNU_EXTERNAL_KERNEL_ARCHIVES=$ARCHIVE_DEPENDENCIES"
   if [ "$APFS_CRYPTO_KPIS" = 1 ]; then
