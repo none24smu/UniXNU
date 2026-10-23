@@ -281,6 +281,12 @@ BOOT_PROGRESS_OBJECTS="osfmk/DEVELOPMENT/arm_init.o osfmk/DEVELOPMENT/startup.o 
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOOT_PROGRESS=$BOOT_PROGRESS"
 # shellcheck disable=SC2086
 rebuild_on_change boot-progress-mode "$BOOT_PROGRESS" $BOOT_PROGRESS_OBJECTS
+# The GOP display (UniXNU NativeLegacyDisplay with offline-legacy-start): the device package builds it against the prelinked
+# IOMobileGraphicsFamily, bound by name at run time (native_kext_symbol, patches/xnu-12377/native-legacy-display.patch).
+# bsd_autoconf starts it once IOBSD is published; like the boot progress hooks, the call compiles in after the first pass.
+NATIVE_LEGACY_DISPLAY=$(flag XNU_NATIVE_LEGACY_DISPLAY)
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_LEGACY_DISPLAY=$NATIVE_LEGACY_DISPLAY"
+rebuild_on_change native-legacy-display-mode "$NATIVE_LEGACY_DISPLAY" bsd/DEVELOPMENT/bsd_init.o
 if [ "$SOURCE_CRYPTO" = 1 ]; then
   EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_SOURCE_CORECRYPTO14=1"
 fi
@@ -333,12 +339,13 @@ make ${MAKE_KEEP_GOING[@]+"${MAKE_KEEP_GOING[@]}"} -C "$WORK" "${XNU_BUILD_TARGE
   CFLAGS_EXTRA="$EXTRA_CFLAGS" "${EXTRA_MAKE_ARGS[@]}" "$@" \
   OBJROOT="$OUT/ios-obj" SYMROOT="$OUT/ios-sym" DSTROOT="$OUT/ios-dst"
 }
-if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] || [ "$NATIVE_DWC3_CONSOLE" = 1 ] || [ "$SOURCE_PTHREAD" = 1 ] || [ "$NATIVE_UFS_SM8350" = 1 ] || [ "$BOOT_PROGRESS" = 1 ]; then
+if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] || [ "$NATIVE_DWC3_CONSOLE" = 1 ] || [ "$SOURCE_PTHREAD" = 1 ] || [ "$NATIVE_UFS_SM8350" = 1 ] || [ "$BOOT_PROGRESS" = 1 ] || \
+   [ "$NATIVE_LEGACY_DISPLAY" = 1 ]; then
   # First produce the unlinked objects/filelist for collision discovery.
   # Bootstrap references are enabled only after the provider archive exists.
   rm -f "$OBJ/osfmk/DEVELOPMENT/prng_random.o" "$OBJ/pexpert/DEVELOPMENT/pe_init.o"
   rm -f "$OBJ/pexpert/DEVELOPMENT/pe_serial.o" "$OBJ/osfmk/DEVELOPMENT/rtclock.o"
-  build_kernel CFLAGS_EXTRA="$EXTRA_CFLAGS -UXNU_SOURCE_CORECRYPTO14 -UXNU_ARM_DT_PLATFORM -UXNU_ARMCPU -UXNU_NATIVE_DWC3_CONSOLE -UXNU_BOOT_PROGRESS" \
+  build_kernel CFLAGS_EXTRA="$EXTRA_CFLAGS -UXNU_SOURCE_CORECRYPTO14 -UXNU_ARM_DT_PLATFORM -UXNU_ARMCPU -UXNU_NATIVE_DWC3_CONSOLE -UXNU_BOOT_PROGRESS -UXNU_NATIVE_LEGACY_DISPLAY" \
     "bsd_init.o_CFLAGS_ADD=-DXNU_NATIVE_UFS_OWNER_ROOT=0" \
     "kern_exec.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE -DXNU_OWNER_DATA_MOUNT=0 -DXNU_NATIVE_RAM_BLOCK=$NATIVE_RAM_BLOCK -include $OWNER_DATA_HEADER"
   ARCHIVE_FLAGS="-L$FAKEROOT/usr/local/lib/kernel -lfirehose_kernel"
@@ -391,6 +398,16 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
     ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-force_load,$archive"
     ARCHIVE_DEPENDENCIES="$ARCHIVE_DEPENDENCIES $archive"
   fi
+  if [ "$NATIVE_LEGACY_DISPLAY" = 1 ]; then
+    if [ ! -f scripts/build-native-legacy-display.py ]; then
+      echo 'XNU_NATIVE_LEGACY_DISPLAY needs scripts/build-native-legacy-display.py from the device repository' >&2
+      exit 1
+    fi
+    python3 scripts/build-native-legacy-display.py
+    archive=$ROOT/build/native-legacy-display/libNativeLegacyDisplay.a
+    ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-force_load,$archive"
+    ARCHIVE_DEPENDENCIES="$ARCHIVE_DEPENDENCIES $archive"
+  fi
   if [ "$NATIVE_UFS_SM8350" = 1 ]; then
     python3 scripts/build-storage-12377.py
     archive=$ROOT/build/storage-12377/libStorageUfs.a
@@ -403,6 +420,10 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
   if [ "$UFS_OWNER_ROOT" = 1 ]; then
     # The first pass must not reference an archive that has not been built.
     # Recompile the callsite only after the actual owner binding exists.
+    rm -f "$OBJ/bsd/DEVELOPMENT/bsd_init.o"
+  fi
+  if [ "$NATIVE_LEGACY_DISPLAY" = 1 ]; then
+    # The first pass compiled the late display start out of bsd_autoconf.
     rm -f "$OBJ/bsd/DEVELOPMENT/bsd_init.o"
   fi
   if [ "$OWNER_DATA_MOUNT" = 1 ]; then
