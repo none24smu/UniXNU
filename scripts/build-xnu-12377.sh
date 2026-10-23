@@ -339,7 +339,8 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
   rm -f "$OBJ/osfmk/DEVELOPMENT/prng_random.o" "$OBJ/pexpert/DEVELOPMENT/pe_init.o"
   rm -f "$OBJ/pexpert/DEVELOPMENT/pe_serial.o" "$OBJ/osfmk/DEVELOPMENT/rtclock.o"
   build_kernel CFLAGS_EXTRA="$EXTRA_CFLAGS -UXNU_SOURCE_CORECRYPTO14 -UXNU_ARM_DT_PLATFORM -UXNU_ARMCPU -UXNU_NATIVE_DWC3_CONSOLE -UXNU_BOOT_PROGRESS" \
-    "bsd_init.o_CFLAGS_ADD=-DXNU_NATIVE_UFS_OWNER_ROOT=0"
+    "bsd_init.o_CFLAGS_ADD=-DXNU_NATIVE_UFS_OWNER_ROOT=0" \
+    "kern_exec.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE -DXNU_OWNER_DATA_MOUNT=0 -DXNU_NATIVE_RAM_BLOCK=$NATIVE_RAM_BLOCK -include $OWNER_DATA_HEADER"
   ARCHIVE_FLAGS="-L$FAKEROOT/usr/local/lib/kernel -lfirehose_kernel"
   ARCHIVE_DEPENDENCIES=""
   if [ "$SOURCE_CRYPTO" = 1 ]; then
@@ -407,6 +408,10 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
     # The first pass must not reference an archive that has not been built.
     # Recompile the callsite only after the actual owner binding exists.
     rm -f "$OBJ/bsd/DEVELOPMENT/kern/bsd_init.o"
+  fi
+  if [ "$OWNER_DATA_MOUNT" = 1 ]; then
+    # The Data mount calls NativeRamBlock, which links from the storage archive.
+    rm -f "$OBJ/bsd/DEVELOPMENT/kern/kern_exec.o"
   fi
   build_kernel "LD_KERNEL_ARCHIVES=$ARCHIVE_FLAGS" "XNU_EXTERNAL_KERNEL_ARCHIVES=$ARCHIVE_DEPENDENCIES"
   if [ "$APFS_CRYPTO_KPIS" = 1 ]; then
