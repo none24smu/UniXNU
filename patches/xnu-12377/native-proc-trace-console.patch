@@ -124,13 +124,17 @@
  #if (DEVELOPMENT || DEBUG)
  TUNABLE_WRITEABLE(unsigned int, exception_log_max_pid, "exception_log_max_pid", 0);
  #endif /* (DEVELOPMENT || DEBUG) */
-@@ -932,6 +986,11 @@ exception_triage(
+@@ -932,6 +986,15 @@ exception_triage(
  		}
  	}
  
 +#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE && defined(__arm64__)
++#ifdef EXC_PTRAUTH_BIT
 +	exception_trace_console(task, thread, exception & ~(EXC_PTRAUTH_BIT | EXC_MAY_BE_UNRECOVERABLE_BIT),
 +	    code, codeCnt);
++#else
++	exception_trace_console(task, thread, exception & ~EXC_MAY_BE_UNRECOVERABLE_BIT, code, codeCnt);
++#endif
 +#endif
 +
  #if DEVELOPMENT || DEBUG
