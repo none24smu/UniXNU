@@ -390,10 +390,6 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
     archive=$ROOT/build/boot-progress/libBootProgress.a
     ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-force_load,$archive"
     ARCHIVE_DEPENDENCIES="$ARCHIVE_DEPENDENCIES $archive"
-    # The first pass compiled the hooks out.
-    for object in $BOOT_PROGRESS_OBJECTS; do
-      rm -f "$OBJ/$object"
-    done
   fi
   if [ "$NATIVE_UFS_SM8350" = 1 ]; then
     python3 scripts/build-storage-12377.py
@@ -412,6 +408,12 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
   if [ "$OWNER_DATA_MOUNT" = 1 ]; then
     # The Data mount calls NativeRamBlock, which links from the storage archive.
     rm -f "$OBJ/bsd/DEVELOPMENT/kern_exec.o"
+  fi
+  if [ "$BOOT_PROGRESS" = 1 ]; then
+    # The first pass compiled the hooks out. The provider builds above read these objects' symbols.
+    for object in $BOOT_PROGRESS_OBJECTS; do
+      rm -f "$OBJ/$object"
+    done
   fi
   build_kernel "LD_KERNEL_ARCHIVES=$ARCHIVE_FLAGS" "XNU_EXTERNAL_KERNEL_ARCHIVES=$ARCHIVE_DEPENDENCIES"
   if [ "$APFS_CRYPTO_KPIS" = 1 ]; then
