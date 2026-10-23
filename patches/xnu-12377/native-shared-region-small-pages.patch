@@ -1,0 +1,221 @@
+diff --git a/osfmk/vm/vm_shared_region_pager.c b/osfmk/vm/vm_shared_region_pager.c
+--- a/osfmk/vm/vm_shared_region_pager.c
++++ b/osfmk/vm/vm_shared_region_pager.c
+@@ -474,6 +474,92 @@ shared_region_pager_data_initialize(
+ 	return KERN_FAILURE;
+ }
+ 
++/*
++ * Copy the code-signature-validated contents of one source page into buf.
++ *
++ * Slide info v5 describes 16 KiB pages, and each slide page's pointer chain
++ * starts in its first 16 KiB-relative bytes. With 4 KiB kernel pages the
++ * chain of a requested page can begin in an earlier page of the same slide
++ * page, so those pages are read here first. No source page is held busy
++ * while this runs.
++ */
++static kern_return_t
++shared_region_pager_copy_source(
++	vm_object_t             src_top_object,
++	vm_object_offset_t      src_offset,
++	const struct vm_object_fault_info *request_fault_info,
++	int                     interruptible,
++	void                    *buf)
++{
++	struct vm_object_fault_info fault_info = *request_fault_info;
++	vm_object_t             src_page_object;
++	vm_page_t               src_page, top_page;
++	vm_fault_return_t       vmfr;
++	kern_return_t           error_code, kr;
++	vm_offset_t             src_vaddr;
++	vm_prot_t               prot;
++
++	fault_info.lo_offset = src_offset;
++	fault_info.hi_offset = src_offset + PAGE_SIZE;
++retry:
++	vm_page_grab_prime();
++	vm_object_lock(src_top_object);
++	vm_object_paging_begin(src_top_object);
++	error_code = 0;
++	prot = VM_PROT_READ;
++	src_page = VM_PAGE_NULL;
++	top_page = VM_PAGE_NULL;
++	vmfr = vm_fault_page(src_top_object, src_offset, VM_PROT_READ, FALSE, FALSE,
++	    &prot, &src_page, &top_page, NULL, &error_code, FALSE, &fault_info, NULL);
++	switch (vmfr) {
++	case VM_FAULT_SUCCESS:
++		break;
++	case VM_FAULT_RETRY:
++		goto retry;
++	case VM_FAULT_MEMORY_SHORTAGE:
++		if (vm_page_wait(interruptible)) {
++			goto retry;
++		}
++		OS_FALLTHROUGH;
++	case VM_FAULT_INTERRUPTED:
++		return MACH_SEND_INTERRUPTED;
++	case VM_FAULT_SUCCESS_NO_VM_PAGE:
++		vm_object_paging_end(src_top_object);
++		vm_object_unlock(src_top_object);
++		OS_FALLTHROUGH;
++	case VM_FAULT_MEMORY_ERROR:
++		return error_code ? error_code : KERN_MEMORY_ERROR;
++	case VM_FAULT_BUSY:
++		return KERN_ALREADY_WAITING;
++	}
++	assert(src_page != VM_PAGE_NULL);
++	assert(src_page->vmp_busy);
++
++	src_page_object = VM_PAGE_OBJECT(src_page);
++	src_vaddr = (vm_offset_t)phystokv((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page) << PAGE_SHIFT);
++	if (src_page_object->code_signed) {
++		vm_page_validate_cs_mapped(src_page, PAGE_SIZE, 0, (const void *)src_vaddr);
++	}
++	if (src_page->vmp_cs_tainted) {
++		kr = KERN_MEMORY_ERROR;
++	} else {
++		bcopy((const void *)src_vaddr, buf, PAGE_SIZE);
++		kr = KERN_SUCCESS;
++	}
++
++	vm_page_wakeup_done(src_page_object, src_page);
++	vm_object_paging_end(src_page_object);
++	vm_object_unlock(src_page_object);
++	if (top_page != VM_PAGE_NULL) {
++		assert(VM_PAGE_OBJECT(top_page) == src_top_object);
++		vm_object_lock(src_top_object);
++		VM_PAGE_FREE(top_page);
++		vm_object_paging_end(src_top_object);
++		vm_object_unlock(src_top_object);
++	}
++	return kr;
++}
++
+ /*
+  * shared_region_pager_data_request()
+  *
+@@ -511,6 +597,10 @@ shared_region_pager_data_request(
+ 	struct vm_object_fault_info     fault_info;
+ 	mach_vm_offset_t        slide_start_address;
+ 	u_int32_t                               slide_info_page_size;
++	uint8_t                 *slide_chunk = NULL;    /* one slide page, when larger than PAGE_SIZE */
++	vm_size_t               slide_chunk_size = 0;
++	vm_object_offset_t      slide_page_start = 0, slide_page_end = 0;
++	vm_offset_t             slide_page_part = 0;
+ 
+ 	PAGER_DEBUG(PAGER_ALL, ("shared_region_pager_data_request: %p, %llx, %x, %x\n", mem_obj, offset, length, protection_required));
+ 
+@@ -576,6 +666,19 @@ shared_region_pager_data_request(
+ 	fault_info.lo_offset += pager->srp_backing_offset;
+ 	fault_info.hi_offset += pager->srp_backing_offset;
+ 
++	if (slide_info_page_size > PAGE_SIZE) {
++		if (slide_info_page_size % PAGE_SIZE != 0) {
++			retval = KERN_INVALID_ARGUMENT;
++			goto done;
++		}
++		slide_chunk_size = slide_info_page_size;
++		slide_chunk = kalloc_data(slide_chunk_size, Z_WAITOK);
++		if (slide_chunk == NULL) {
++			retval = KERN_RESOURCE_SHORTAGE;
++			goto done;
++		}
++	}
++
+ 	/*
+ 	 * Fill in the contents of the pages requested by VM.
+ 	 */
+@@ -591,6 +694,29 @@ shared_region_pager_data_request(
+ 			continue;
+ 		}
+ 
++		if (slide_chunk != NULL) {
++			vm_object_offset_t page_in_backing_object = pager->srp_backing_offset + offset + cur_offset;
++
++			slide_page_start = slide_page_end = 0;
++			if (page_in_backing_object >= pager->srp_slide_info->si_start &&
++			    page_in_backing_object < pager->srp_slide_info->si_end) {
++				vm_object_offset_t in_range = page_in_backing_object - pager->srp_slide_info->si_start;
++
++				/* Read the pages of this slide page that come before the requested one. */
++				slide_page_part = (vm_offset_t)(in_range % slide_info_page_size);
++				slide_page_start = page_in_backing_object - slide_page_part;
++				slide_page_end = slide_page_start + slide_info_page_size;
++				for (vm_offset_t part = 0; part < slide_page_part; part += PAGE_SIZE) {
++					kr = shared_region_pager_copy_source(src_top_object, slide_page_start + part,
++					    &fault_info, interruptible, slide_chunk + part);
++					if (kr != KERN_SUCCESS) {
++						retval = kr;
++						goto done;
++					}
++				}
++			}
++		}
++
+ 		/*
+ 		 * Map the source (dyld shared cache) page in the kernel's
+ 		 * virtual address space.
+@@ -707,6 +833,45 @@ retry_src_fault:
+ 		 * Process the original contents of the source page
+ 		 * into the destination page.
+ 		 */
++		if (slide_chunk != NULL) {
++			if (slide_page_end == 0) {
++				/* outside of the sliding range */
++				bcopy((const char *)src_vaddr, (char *)dst_vaddr, PAGE_SIZE);
++				shared_region_pager_copied++;
++			} else {
++				/*
++				 * Slide the whole slide page in the buffer: the pages before this
++				 * one carry the start of the chain, the ones after it read as
++				 * zero and end it. Only this page is kept.
++				 */
++				bcopy((const char *)src_vaddr, slide_chunk + slide_page_part, PAGE_SIZE);
++				bzero(slide_chunk + slide_page_part + PAGE_SIZE,
++				    slide_info_page_size - slide_page_part - PAGE_SIZE);
++				kr = vm_shared_region_slide_page(pager->srp_slide_info,
++				    (vm_offset_t)slide_chunk,
++				    (mach_vm_offset_t)(slide_page_start - pager->srp_slide_info->si_start + slide_start_address),
++				    (uint32_t)((slide_page_start - pager->srp_slide_info->si_start) / slide_info_page_size),
++#if __has_feature(ptrauth_calls)
++				    pager->srp_slide_info->si_ptrauth ? pager->srp_jop_key : 0
++#else /* __has_feature(ptrauth_calls) */
++				    0
++#endif /* __has_feature(ptrauth_calls) */
++				    );
++				bcopy(slide_chunk + slide_page_part, (char *)dst_vaddr, PAGE_SIZE);
++				if (kr != KERN_SUCCESS) {
++					ktriage_record(thread_tid(current_thread()), KDBG_TRIAGE_EVENTID(KDBG_TRIAGE_SUBSYS_SHARED_REGION, KDBG_TRIAGE_RESERVED, KDBG_TRIAGE_SHARED_REGION_SLIDE_ERROR), kr /* arg */);
++					if (panic_on_dyld_issue) {
++						panic("%s(): shared region slide error %d",
++						    __func__, kr);
++					}
++					shared_region_pager_slid_error++;
++					retval = KERN_MEMORY_ERROR;
++				} else {
++					shared_region_pager_slid++;
++				}
++			}
++			goto source_processed;
++		}
+ 		for (offset_in_page = 0;
+ 		    offset_in_page < PAGE_SIZE;
+ 		    offset_in_page += slide_info_page_size) {
+@@ -789,6 +954,7 @@ retry_src_fault:
+ 			shared_region_pager_slid++;
+ 		}
+ 
++source_processed:
+ 		assert(VM_PAGE_OBJECT(src_page) == src_page_object);
+ 		assert(src_page->vmp_busy);
+ 		assert(src_page_object->paging_in_progress > 0);
+@@ -844,6 +1010,9 @@ done:
+ 	if (src_top_object != VM_OBJECT_NULL) {
+ 		vm_object_deallocate(src_top_object);
+ 	}
++	if (slide_chunk != NULL) {
++		kfree_data(slide_chunk, slide_chunk_size);
++	}
+ 	return retval;
+ }
+ 
