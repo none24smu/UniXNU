@@ -1,0 +1,20 @@
+--- a/osfmk/arm/commpage/commpage.c
++++ b/osfmk/arm/commpage/commpage.c
+@@ -142,6 +142,17 @@
+ 	*((uint32_t*)(_COMM_PAGE_CPUFAMILY + _COMM_PAGE_RW_OFFSET)) = (uint32_t)cpufamily;
+ 	*((uint32_t*)(_COMM_PAGE_DEV_FIRM_LEGACY + _COMM_PAGE_RW_OFFSET)) = (uint32_t)PE_i_can_has_debugger(NULL);
+ 	*((uint32_t*)(_COMM_PAGE_DEV_FIRM + _COMM_PAGE_RO_OFFSET)) = (uint32_t)PE_i_can_has_debugger(NULL);
++#if defined(XNU_DYLD_FLAGS_BOOTARG) && XNU_DYLD_FLAGS_BOOTARG
++	/*
++	 * dyld reads its flags from the comm page; the low 32 bits belong to the
++	 * dyld_flags boot-arg. Customer devices only honour the boot-arg for PID 1
++	 * on internal installs, so publish it here before launchd starts.
++	 */
++	{
++		extern uint64_t dyld_flags;
++		*((uint64_t*)(_COMM_PAGE_DYLD_FLAGS + _COMM_PAGE_RW_OFFSET)) = dyld_flags & 0xffffffffULL;
++	}
++#endif
+ 	*((uint8_t*)(_COMM_PAGE_USER_TIMEBASE + _COMM_PAGE_RW_OFFSET)) = user_timebase_type();
+ 
+ 	// Populate logical CPU -> logical cluster table

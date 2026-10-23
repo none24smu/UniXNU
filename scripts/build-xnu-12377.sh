@@ -224,6 +224,10 @@ rebuild_on_change dt-panic-region-mode "$DT_PANIC_REGION" pexpert/DEVELOPMENT/pe
 TRUST_CACHE_MODE=$(flag XNU_TRUST_CACHE_RUNTIME)
 EXTRA_MAKE_ARGS+=("startup.o_CFLAGS_ADD=-DXNU_NATIVE_TRUST_CACHE=$TRUST_CACHE_MODE")
 rebuild_on_change trust-cache-mode "$TRUST_CACHE_MODE" osfmk/DEVELOPMENT/startup.o
+# Publish the dyld_flags boot-arg in the comm page before launchd, as customer dyld reads only the comm page.
+DYLD_FLAGS_BOOTARG=$(flag XNU_DYLD_FLAGS_BOOTARG)
+EXTRA_MAKE_ARGS+=("commpage.o_CFLAGS_ADD=-DXNU_DYLD_FLAGS_BOOTARG=$DYLD_FLAGS_BOOTARG")
+rebuild_on_change dyld-flags-bootarg-mode "$DYLD_FLAGS_BOOTARG" osfmk/DEVELOPMENT/commpage.o
 if [ "$SOURCE_CRYPTO" = 1 ]; then
   EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_SOURCE_CORECRYPTO14=1"
 fi
