@@ -228,6 +228,11 @@ rebuild_on_change trust-cache-mode "$TRUST_CACHE_MODE" osfmk/DEVELOPMENT/startup
 DYLD_FLAGS_BOOTARG=$(flag XNU_DYLD_FLAGS_BOOTARG)
 EXTRA_MAKE_ARGS+=("commpage.o_CFLAGS_ADD=-DXNU_DYLD_FLAGS_BOOTARG=$DYLD_FLAGS_BOOTARG")
 rebuild_on_change dyld-flags-bootarg-mode "$DYLD_FLAGS_BOOTARG" osfmk/DEVELOPMENT/commpage.o
+# Print every exec, spawn and exit on the console, for a userland that has no log daemon yet.
+PROC_TRACE_CONSOLE=$(flag XNU_PROC_TRACE_CONSOLE)
+EXTRA_MAKE_ARGS+=("kern_exec.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE")
+EXTRA_MAKE_ARGS+=("kern_exit.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE")
+rebuild_on_change proc-trace-console-mode "$PROC_TRACE_CONSOLE" bsd/DEVELOPMENT/kern/kern_exec.o bsd/DEVELOPMENT/kern/kern_exit.o
 if [ "$SOURCE_CRYPTO" = 1 ]; then
   EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_SOURCE_CORECRYPTO14=1"
 fi

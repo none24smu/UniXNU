@@ -1,0 +1,63 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -1898,6 +1898,24 @@
+     0, 0, rsr_version_sysctl, "I", "");
+ #endif /* XNU_TARGET_OS_OSX */
+ 
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE
++/*
++ * Print every exec and spawn with its result on the console. A port whose
++ * userland has no log daemon yet can follow what launchd starts.
++ */
++static void
++exec_trace_console(proc_t p, struct image_params *imgp, int error)
++{
++	const char *path = "?";
++
++	if (imgp != NULL && imgp->ip_strings != NULL) {
++		path = imgp->ip_strings + strlen(EXECUTABLE_KEY);
++	}
++	printf("proc-trace: exec pid %d ppid %d %s error %d\n",
++	    proc_getpid(p), proc_ppid(p), path, error);
++}
++#endif
++
+ /*
+  * exec_mach_imgact
+  *
+@@ -5563,6 +5581,9 @@
+ 	if (!error && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)) {
+ 		proc_knote(p, NOTE_EXEC);
+ 	}
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE
++	exec_trace_console(p, imgp, error);
++#endif
+ 
+ 	if (imgp != NULL) {
+ 		uthread_set_exec_data(current_uthread(), NULL);
+@@ -6204,6 +6225,9 @@
+ 	if (exec_done && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)) {
+ 		proc_knote(p, NOTE_EXEC);
+ 	}
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE
++	exec_trace_console(p, imgp, error);
++#endif
+ 
+ 	if (imgp->ip_vp != NULLVP) {
+ 		vnode_put(imgp->ip_vp);
+--- a/bsd/kern/kern_exit.c
++++ b/bsd/kern/kern_exit.c
+@@ -1647,6 +1647,13 @@
+ 	int error = 0;
+ 	bool proc_exiting = false;
+ 
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE
++	/* The wait status carries the exit code or the terminating signal. */
++	printf("proc-trace: exit pid %d %s status 0x%x reason %u/0x%llx\n", proc_getpid(p), p->p_comm, rv,
++	    exit_reason != OS_REASON_NULL ? exit_reason->osr_namespace : 0,
++	    exit_reason != OS_REASON_NULL ? exit_reason->osr_code : 0ULL);
++#endif
++
+ #if DEVELOPMENT || DEBUG
+ 	/*
+ 	 * Debug boot-arg: panic here if matching process is exiting with non-zero code.
