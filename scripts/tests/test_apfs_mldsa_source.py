@@ -58,7 +58,8 @@ class ActualMLDSASource(unittest.TestCase):
         cls.sources += sorted((cls.source / 'cckeccak/src').glob('*.c'))
         cls.sources += [cls.source / 'cc/src' / name for name in (
             'cc_clear.c', 'cc_cmp_safe.c', 'cc_memory.c', 'cc_fault_canary.c',
-            'cc_value_barrier.c', 'cc_try_abort.c', 'cc_abort.c')]
+            'cc_value_barrier.c', 'cc_try_abort.c', 'cc_abort.c',
+            'cc_dit.c', 'cc_timing_safe.c')]
         cls.sources += [cls.source / 'ccxof/src/ccxof.c', cls.source / 'ccn/src/ccn_sizeof.c']
         cls.sources += [ROOT / 'scripts/apfs-mldsa-selftest.c']
         cls.plain = cls.build('plain')

@@ -29,10 +29,11 @@ def source_files(source):
     files += sorted((source / 'cckeccak/src').glob('*.c'))
     files += [source / 'cc/src' / name for name in (
         'cc_clear.c', 'cc_cmp_safe.c', 'cc_memory.c', 'cc_fault_canary.c',
-        'cc_value_barrier.c', 'cc_try_abort.c', 'cc_abort.c')]
+        'cc_value_barrier.c', 'cc_try_abort.c', 'cc_abort.c',
+        'cc_dit.c', 'cc_timing_safe.c')]
     files += [source / 'ccxof/src/ccxof.c', source / 'ccn/src/ccn_sizeof.c']
-    if len(files) != 23 or any(not p.is_file() for p in files):
-        raise SystemExit('Pinned 23-source ML-DSA implementation inventory changed')
+    if len(files) != 25 or any(not p.is_file() for p in files):
+        raise SystemExit('Pinned 25-source ML-DSA implementation inventory changed')
     return files
 
 
@@ -182,7 +183,7 @@ def main():
               'kernel_runtime_verified': False}
     (output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     if args.prepare_only:
-        print('Prepared23 source files plus runtime KAT; no native compilation performed')
+        print('Prepared25 source files plus runtime KAT; no native compilation performed')
         return
     sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
     framework = ROOT / '.cache/xnu-12377.121.6-fakeroot/System/Library/Frameworks/Kernel.framework/Versions/A'
