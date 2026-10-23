@@ -242,6 +242,15 @@ EDT_FSTAB=$(flag XNU_EDT_FSTAB)
 EXTRA_MAKE_ARGS+=("vfs_subr.o_CFLAGS_ADD=-DXNU_EDT_FSTAB=$EDT_FSTAB")
 EXTRA_MAKE_ARGS+=("kern_newsysctl.o_CFLAGS_ADD=-DXNU_EDT_FSTAB=$EDT_FSTAB")
 rebuild_on_change edt-fstab-mode "$EDT_FSTAB" bsd/DEVELOPMENT/vfs/vfs_subr.o bsd/DEVELOPMENT/kern/kern_newsysctl.o
+# The boot progress layer (UniXNU zzz-boot-progress, library from the device package as kits/<kit>): diagnostic page,
+# checkpoints and the user fault probe. The hooks compile in once the library exists, after the first pass.
+BOOT_PROGRESS=$(flag XNU_BOOT_PROGRESS)
+BOOT_PROGRESS_OBJECTS="osfmk/DEVELOPMENT/arm_init.o osfmk/DEVELOPMENT/startup.o osfmk/DEVELOPMENT/video_console.o
+  osfmk/DEVELOPMENT/serial_console.o osfmk/DEVELOPMENT/sleh.o bsd/DEVELOPMENT/kern/bsd_init.o bsd/DEVELOPMENT/kern/kern_exec.o
+  bsd/DEVELOPMENT/kern/kern_exit.o pexpert/DEVELOPMENT/pe_kprintf.o"
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOOT_PROGRESS=$BOOT_PROGRESS"
+# shellcheck disable=SC2086
+rebuild_on_change boot-progress-mode "$BOOT_PROGRESS" $BOOT_PROGRESS_OBJECTS
 if [ "$SOURCE_CRYPTO" = 1 ]; then
   EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_SOURCE_CORECRYPTO14=1"
 fi
@@ -294,12 +303,12 @@ make ${MAKE_KEEP_GOING[@]+"${MAKE_KEEP_GOING[@]}"} -C "$WORK" "${XNU_BUILD_TARGE
   CFLAGS_EXTRA="$EXTRA_CFLAGS" "${EXTRA_MAKE_ARGS[@]}" "$@" \
   OBJROOT="$OUT/ios-obj" SYMROOT="$OUT/ios-sym" DSTROOT="$OUT/ios-dst"
 }
-if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] || [ "$NATIVE_DWC3_CONSOLE" = 1 ] || [ "$SOURCE_PTHREAD" = 1 ] || [ "$NATIVE_UFS_SM8350" = 1 ]; then
+if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] || [ "$NATIVE_DWC3_CONSOLE" = 1 ] || [ "$SOURCE_PTHREAD" = 1 ] || [ "$NATIVE_UFS_SM8350" = 1 ] || [ "$BOOT_PROGRESS" = 1 ]; then
   # First produce the unlinked objects/filelist for collision discovery.
   # Bootstrap references are enabled only after the provider archive exists.
   rm -f "$OBJ/osfmk/DEVELOPMENT/prng_random.o" "$OBJ/pexpert/DEVELOPMENT/pe_init.o"
   rm -f "$OBJ/pexpert/DEVELOPMENT/pe_serial.o" "$OBJ/osfmk/DEVELOPMENT/rtclock.o"
-  build_kernel CFLAGS_EXTRA="$EXTRA_CFLAGS -UXNU_SOURCE_CORECRYPTO14 -UXNU_ARM_DT_PLATFORM -UXNU_ARMCPU -UXNU_NATIVE_DWC3_CONSOLE" \
+  build_kernel CFLAGS_EXTRA="$EXTRA_CFLAGS -UXNU_SOURCE_CORECRYPTO14 -UXNU_ARM_DT_PLATFORM -UXNU_ARMCPU -UXNU_NATIVE_DWC3_CONSOLE -UXNU_BOOT_PROGRESS" \
     "bsd_init.o_CFLAGS_ADD=-DXNU_NATIVE_UFS_OWNER_ROOT=0"
   ARCHIVE_FLAGS="-L$FAKEROOT/usr/local/lib/kernel -lfirehose_kernel"
   ARCHIVE_DEPENDENCIES=""
@@ -340,6 +349,20 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
     archive=$ROOT/build/libpthread-12377/libpthread_kernel.a
     ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-force_load,$archive"
     ARCHIVE_DEPENDENCIES="$ARCHIVE_DEPENDENCIES $archive"
+  fi
+  if [ "$BOOT_PROGRESS" = 1 ]; then
+    if [ ! -f scripts/build-boot-progress.py ]; then
+      echo 'XNU_BOOT_PROGRESS needs scripts/build-boot-progress.py from the device repository' >&2
+      exit 1
+    fi
+    python3 scripts/build-boot-progress.py
+    archive=$ROOT/build/boot-progress/libBootProgress.a
+    ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-force_load,$archive"
+    ARCHIVE_DEPENDENCIES="$ARCHIVE_DEPENDENCIES $archive"
+    # The first pass compiled the hooks out.
+    for object in $BOOT_PROGRESS_OBJECTS; do
+      rm -f "$OBJ/$object"
+    done
   fi
   if [ "$NATIVE_UFS_SM8350" = 1 ]; then
     python3 scripts/build-storage-12377.py
