@@ -1,7 +1,9 @@
 """Exercise actual root-binding code against adversarial registry graphs."""
 import ctypes
+import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -125,6 +127,83 @@ class BindingTests(unittest.TestCase):
         for case in (1, 2, 10, 17):
             self.assertEqual(self.lib.run_case(case), 0)
             self.assertEqual(self.lib.calls(), 0)
+
+
+XNU_SOURCE = Path(os.environ.get('OWNER_ROOT_XNU_SOURCE', ROOT / 'refer/xnu'))
+
+
+@unittest.skipUnless((XNU_SOURCE / 'bsd/kern/bsd_init.c').is_file(), 'supply exact XNU source')
+class ActualBSDCallsiteTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory(prefix='ufs-owner-callsite-')
+        out = Path(cls.temporary.name)
+        target = out / 'bsd/kern/bsd_init.c'
+        target.parent.mkdir(parents=True)
+        shutil.copyfile(XNU_SOURCE / 'bsd/kern/bsd_init.c', target)
+        subprocess.run(['git', 'apply', '--unsafe-paths', '--directory', str(out), str(ROOT / 'patches/xnu-12377/native-ufs-owner-root.patch')], cwd=out, check=True, capture_output=True)
+        text = target.read_text()
+        start = text.index('int autherr = VNOP_IOCTL(rootvnode, FSIOC_KERNEL_ROOTAUTH')
+        body = text[start:text.index('\n\t\t}\n\t}\n', start)]
+        stubs = r'''
+#include <stdint.h>
+#include <stddef.h>
+#include <sys/types.h>
+#define DEVELOPMENT 1
+#define DEBUG 0
+#define NODEV ((dev_t)-1)
+#define MNT_RDONLY 1
+#define FSIOC_KERNEL_ROOTAUTH 0
+#define major(d) ((unsigned)((d)>>24))
+#define minor(d) ((unsigned)((d)&0xffffff))
+#define VNOP_IOCTL(...) apple_result
+typedef void *mount_t;typedef void *vnode_t;
+vnode_t rootvnode=(void*)1;static dev_t rootdev,mounted;
+static int apple_result,owner_result,ro,has_device,panicked,queries,puts;
+mount_t vnode_mount(vnode_t v){return v;}
+vnode_t vfs_devvp(mount_t m){return has_device?m:NULL;}
+dev_t vnode_specrdev(vnode_t v){(void)v;return mounted;}
+unsigned vfs_flags(mount_t m){(void)m;return ro?MNT_RDONLY:0;}
+void vnode_put(vnode_t v){(void)v;puts++;}
+void panic(const char *s){(void)s;panicked=1;}
+int test_printf(const char *s,...){(void)s;return 0;}
+#define printf test_printf
+int native_ufs_owner_root_authorized(dev_t m,dev_t s,int readonly){queries++;return owner_result&&readonly&&m==s;}
+int auth_run(int apple,int owner,int readonly,int device,int same){
+apple_result=apple;owner_result=owner;ro=readonly;has_device=device;
+mounted=0x1000007;rootdev=mounted+(same?0:1);panicked=queries=puts=0;
+'''
+        cls.libraries = []
+        for enabled in (0, 1):
+            source = out / ('callsite%d.c' % enabled)
+            source.write_text(stubs + body + '\nreturn !panicked;}\nint query_count(void){return queries;}\nint put_count(void){return puts;}\n')
+            library = out / ('callsite%d.so' % enabled)
+            result = subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC', '-DXNU_NATIVE_UFS_OWNER_ROOT=%d' % enabled, str(source), '-o', str(library)], capture_output=True, text=True)
+            if result.returncode:
+                raise RuntimeError(result.stderr)
+            native = ctypes.CDLL(str(library))
+            native.auth_run.argtypes = [ctypes.c_int] * 5
+            cls.libraries.append(native)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    def test_disabled_profile_preserves_original_apple_check(self):
+        native = self.libraries[0]
+        self.assertEqual(native.auth_run(0, 0, 1, 1, 1), 1)
+        self.assertEqual(native.auth_run(81, 1, 1, 1, 1), 0)
+        self.assertEqual(native.query_count(), 0)
+
+    def test_enabled_profile_requires_real_binding_and_balances_vnode_reference(self):
+        native = self.libraries[1]
+        self.assertEqual(native.auth_run(0, 0, 1, 1, 1), 1)
+        self.assertEqual(native.query_count(), 0)
+        self.assertEqual(native.auth_run(81, 1, 1, 1, 1), 1)
+        self.assertEqual(native.query_count(), 1)
+        self.assertEqual(native.put_count(), 1)
+        for owner, readonly, device, same in ((0, 1, 1, 1), (1, 0, 1, 1), (1, 1, 0, 1), (1, 1, 1, 0)):
+            self.assertEqual(native.auth_run(81, owner, readonly, device, same), 0)
 
 
 if __name__ == '__main__':
