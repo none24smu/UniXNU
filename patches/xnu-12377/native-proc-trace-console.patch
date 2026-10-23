@@ -47,15 +47,17 @@
  		vnode_put(imgp->ip_vp);
 --- a/bsd/kern/kern_exit.c
 +++ b/bsd/kern/kern_exit.c
-@@ -1647,6 +1647,13 @@
+@@ -1647,6 +1647,15 @@
  	int error = 0;
  	bool proc_exiting = false;
  
 +#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE
-+	/* The wait status carries the exit code or the terminating signal. */
-+	printf("proc-trace: exit pid %d %s status 0x%x reason %u/0x%llx\n", proc_getpid(p), p->p_comm, rv,
++	/* The wait status carries the exit code or the terminating signal; abort_with_reason adds a description. */
++	const char *exit_desc = exit_reason_get_string_desc(exit_reason);
++	printf("proc-trace: exit pid %d %s status 0x%x reason %u/0x%llx%s%s\n", proc_getpid(p), p->p_comm, rv,
 +	    exit_reason != OS_REASON_NULL ? exit_reason->osr_namespace : 0,
-+	    exit_reason != OS_REASON_NULL ? exit_reason->osr_code : 0ULL);
++	    exit_reason != OS_REASON_NULL ? exit_reason->osr_code : 0ULL,
++	    exit_desc != NULL ? " " : "", exit_desc != NULL ? exit_desc : "");
 +#endif
 +
  #if DEVELOPMENT || DEBUG
