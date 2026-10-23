@@ -61,3 +61,78 @@
  #if DEVELOPMENT || DEBUG
  	/*
  	 * Debug boot-arg: panic here if matching process is exiting with non-zero code.
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -133,6 +133,60 @@ extern int      proc_selfpid(void);
+ extern char     *proc_name_address(struct proc *p);
+ #endif /* MACH_BSD */
+ 
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE && defined(__arm64__)
++#include <arm/thread.h>
++#include <vm/vm_shared_region_internal.h>
++
++/*
++ * Print the user registers, a frame-pointer backtrace and the shared cache
++ * base of a thread that raises a hardware exception. Without a crash
++ * reporter this is the only record of where userland faulted.
++ */
++static void
++exception_trace_console(task_t task, thread_t thread, exception_type_t exception,
++    mach_exception_data_t code, mach_msg_type_number_t codeCnt)
++{
++	struct arm_saved_state *state = get_user_regs(thread);
++	vm_shared_region_t shared_region;
++	mach_vm_offset_t cache = 0;
++	uint64_t frame[2], fp;
++	int pid = proc_pid(get_bsdtask_info(task));
++
++	if (exception < EXC_BAD_ACCESS || exception > EXC_BREAKPOINT || state == NULL || !is_saved_state64(state)) {
++		return;
++	}
++	shared_region = vm_shared_region_get(task);
++	if (shared_region != NULL) {
++		if (vm_shared_region_start_address(shared_region, &cache) != KERN_SUCCESS) {
++			cache = 0;
++		}
++		vm_shared_region_deallocate(shared_region);
++	}
++	printf("proc-trace: exception pid %d %s type %d codes 0x%llx 0x%llx pc 0x%llx lr 0x%llx sp 0x%llx "
++	    "far 0x%llx esr 0x%llx cache 0x%llx\n", pid, proc_name_address(get_bsdtask_info(task)), exception,
++	    (uint64_t)code[0], codeCnt > 1 ? (uint64_t)code[1] : 0, (uint64_t)get_saved_state_pc(state),
++	    (uint64_t)get_saved_state_lr(state), (uint64_t)get_saved_state_sp(state), (uint64_t)get_saved_state_far(state),
++	    get_saved_state_esr(state), (uint64_t)cache);
++	for (unsigned reg = 0; reg < 29; reg += 4) {
++		printf("proc-trace:  x%u 0x%llx 0x%llx 0x%llx 0x%llx\n", reg, (uint64_t)get_saved_state_reg(state, reg),
++		    reg + 1 < 29 ? (uint64_t)get_saved_state_reg(state, reg + 1) : 0,
++		    reg + 2 < 29 ? (uint64_t)get_saved_state_reg(state, reg + 2) : 0,
++		    reg + 3 < 29 ? (uint64_t)get_saved_state_reg(state, reg + 3) : 0);
++	}
++	fp = (uint64_t)get_saved_state_fp(state);
++	for (int depth = 0; depth < 16 && fp != 0 && (fp & 0xf) == 0; depth++) {
++		if (copyin((user_addr_t)fp, frame, sizeof(frame)) != 0) {
++			break;
++		}
++		printf("proc-trace:  frame %d 0x%llx\n", depth, (unsigned long long)frame[1]);
++		if (frame[0] <= fp) {
++			break;
++		}
++		fp = frame[0];
++	}
++}
++#endif
++
+ #if (DEVELOPMENT || DEBUG)
+ TUNABLE_WRITEABLE(unsigned int, exception_log_max_pid, "exception_log_max_pid", 0);
+ #endif /* (DEVELOPMENT || DEBUG) */
+@@ -932,6 +986,11 @@ exception_triage(
+ 		}
+ 	}
+ 
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE && defined(__arm64__)
++	exception_trace_console(task, thread, exception & ~(EXC_PTRAUTH_BIT | EXC_MAY_BE_UNRECOVERABLE_BIT),
++	    code, codeCnt);
++#endif
++
+ #if DEVELOPMENT || DEBUG
+ #ifdef MACH_BSD
+ 	if (proc_pid(get_bsdtask_info(task)) <= exception_log_max_pid) {
