@@ -1,0 +1,104 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 812345e..32a5bc6 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7964,6 +7964,88 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
+  *		word width of the kernel. Once the self-exec completes, the
+  *		initproc might be different.
+  */
++#if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT
++/*
++ * UniXNU offline-owner-systemos-mount.patch native_owner_data_prepare, for xnu-12377: mount the writable Data
++ * volume of the NativeRamBlock seed (selected by its APFS volume UUID) at /private/var before launchd. The
++ * mount payload is the one UniXNU uses: mount(2) takes the device path pointer at +0 for a local filesystem
++ * and hands APFS the rest (mode at +16, owner uid/gid at +0x144/+0x148 of the user layout).
++ */
++#if !DEVELOPMENT && !DEBUG
++#error The scratch Data mount is a development instrument
++#endif
++#if !defined(XNU_NATIVE_RAM_BLOCK) || !XNU_NATIVE_RAM_BLOCK
++#error The scratch Data mount needs the NativeRamBlock seed provider
++#endif
++#ifndef XNU_OWNER_DATA_VOLUME_UUID
++#error Supply the Data seed volume UUID (XNU_OWNER_DATA_VOLUME_UUID)
++#endif
++extern int native_ram_block_volume_seed(const char *, dev_t *, char *, size_t, uint64_t *, uint64_t *, uint8_t *);
++volatile int native_owner_data_status = -1;
++volatile int native_owner_data_stage = 0;
++volatile int native_owner_data_readonly = -1;
++volatile dev_t native_owner_data_device = NODEV;
++uint64_t native_owner_data_seed_base, native_owner_data_seed_size;
++uint8_t native_owner_data_seed_sha256[32];
++char native_owner_data_device_path[64];
++
++static int
++native_owner_data_prepare(proc_t p, user_addr_t scratch)
++{
++	uint64_t base = 0, size = 0;
++	dev_t device = NODEV;
++	int error = EINVAL;
++	vnode_t data_root = NULLVP;
++	char device_path[64] = "";
++	/* The typed provider supplies logical seed identity for both dense and
++	 * sparse media. A sparse disk has no contiguous logical-byte address. */
++	if (!native_ram_block_volume_seed(XNU_OWNER_DATA_VOLUME_UUID, &device, device_path,
++	    sizeof(device_path), &base, &size, native_owner_data_seed_sha256)) { error = ENOENT; goto done; }
++	/* The typed provider's disk may be far larger than 2 GiB (a persistent Data disk keeps only its seed's nonzero pages). */
++	if (!size || size > UINT64_C(0x10000000000) || (size & 4095)) goto done;
++	native_owner_data_seed_base = base;
++	native_owner_data_seed_size = size;
++	native_owner_data_stage = 1;
++	strlcpy(native_owner_data_device_path, device_path, sizeof(native_owner_data_device_path));
++	uint8_t payload[0x150] = {0};
++	user64_addr_t spec = scratch + 0x160;
++	uint16_t mode = 1;
++	uint32_t anonymous_owner = 99;
++	memcpy(payload, &spec, sizeof(spec));
++	memcpy(payload + 16, &mode, sizeof(mode));
++	memcpy(payload + 0x144, &anonymous_owner, sizeof(anonymous_owner));
++	memcpy(payload + 0x148, &anonymous_owner, sizeof(anonymous_owner));
++	struct mount_args request = {.type = scratch + 0x100, .path = scratch + 0x120,
++	    .flags = 0, .data = scratch + 0x200};
++	int32_t result = 0;
++	if ((error = copyout("apfs", request.type, 5)) ||
++	    (error = copyout("/private/var", request.path, 13)) ||
++	    (error = copyout(device_path, spec, strlen(device_path) + 1)) ||
++	    (error = copyout(payload, request.data, sizeof(payload)))) goto done;
++	native_owner_data_stage = 2;
++	error = mount(p, &request, &result);
++	if (error) goto done;
++	native_owner_data_stage = 3;
++	error = vnode_lookup("/private/var", 0, &data_root, vfs_context_current());
++	if (error) goto done;
++	mount_t data_mount = vnode_mount(data_root);
++	vnode_t device_node = vfs_devvp(data_mount);
++	dev_t actual = device_node ? vnode_specrdev(device_node) : NODEV;
++	if (device_node) vnode_put(device_node);
++	native_owner_data_device = actual;
++	native_owner_data_readonly = (vfs_flags(data_mount) & MNT_RDONLY) != 0;
++	if (actual != device || (vfs_flags(data_mount) & MNT_RDONLY) ||
++	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
++	if (!error) native_owner_data_stage = 4;
++done:
++	if (data_root) vnode_put(data_root);
++	native_owner_data_status = error;
++	printf("OwnerData: stage=%d status=%d device=%s size=0x%llx\n", native_owner_data_stage, error,
++	    native_owner_data_device_path, size);
++	return error;
++}
++#endif
++
+ static int
+ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
+ {
+@@ -8105,6 +8187,10 @@ load_init_program(proc_t p)
+ 
+ 	(void) mach_vm_allocate_kernel(map, &scratch_addr, map_page_size,
+ 	    VM_MAP_KERNEL_FLAGS_ANYWHERE());
++#if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT
++	int data_error = native_owner_data_prepare(p, (user_addr_t)scratch_addr);
++	if (data_error) panic("offline scratch Data mount failed: %d", data_error);
++#endif
+ #if CONFIG_MEMORYSTATUS
+ 	(void) memorystatus_init_at_boot_snapshot();
+ #endif /* CONFIG_MEMORYSTATUS */
