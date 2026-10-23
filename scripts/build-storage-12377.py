@@ -83,6 +83,12 @@ sources = [exported_source(name) for name in (
     'IOPartitionScheme', 'IOGUIDPartitionScheme', 'IOFDiskPartitionScheme',
     'IOApplePartitionScheme', 'IOAppleLabelScheme', 'IOFilterScheme')]
 sources += [patched, UFS / 'NativeUfs.cpp']
+# The Data seed provider (packed DBRDISK1 seed, persistent store through NativeUfs's end-of-userdata window).
+ram_block = os.environ.get('XNU_NATIVE_RAM_BLOCK', '0')
+if ram_block not in ('0', '1'):
+    raise SystemExit('XNU_NATIVE_RAM_BLOCK must be 0 or 1')
+if ram_block == '1':
+    sources.append(ROOT / 'drivers/NativeRamBlock/NativeRamBlock.cpp')
 verified = os.environ.get('XNU_NATIVE_UFS_VERIFIED_ROOT') == '1'
 owner_root = os.environ.get('XNU_NATIVE_UFS_OWNER_ROOT', '0')
 if owner_root not in ('0', '1') or (owner_root == '1' and not verified):
@@ -169,6 +175,7 @@ report = {'source_revision': REVISION, 'objects': len(objects),
           'sm8350_stream_id': 0xe0, 'kernel_collisions': collisions,
           'missing_kernel_imports': missing, 'hardware_qualified': False, 'owner_policy_from_ufs': verified,
           'owner_mounted_root_binding': owner_root == '1', 'progress_observer_compiled': False,
+          'native_ram_block': ram_block == '1',
           'native_driver_sha256': hashlib.sha256(patched.read_bytes()).hexdigest()}
 (OUT / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
 if collisions or missing:

@@ -1,7 +1,7 @@
 diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
-@@ -36,3 +36,31 @@
+@@ -36,3 +36,40 @@
 +#if XNU_NATIVE_UFS_SM8350
 +    "   {"
 +    "     'IOClass' = NativeUfs;"
@@ -28,6 +28,15 @@ diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
 +    "     'IOMatchCategory' = IOMediaBSDClient;"
 +    "     'IOProbeScore' = 30000:32;"
 +    "     'IOResourceMatch' = IOBSD;"
++    "   },"
++#endif
++#if XNU_NATIVE_RAM_BLOCK
++    "   {"
++    "     'IOClass' = NativeRamBlock;"
++    "     'IOMatchCategory' = NativeRamBlock;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOResourceMatch' = IOBSD;"
++    "     'IOProbeScore' = 1000:32;"
 +    "   },"
 +#endif
      "   {"
