@@ -107,6 +107,12 @@ for source in sources:
     if not source.is_file() or not source.resolve().is_relative_to(SOURCE.resolve()):
         raise SystemExit(f'Missing or unexpected source path: {source}')
 if apfs_kpis:
+    # These real wrappers are already in the pinned kernel sources phase;
+    # retain their public names at the final link instead of compiling twice.
+    for name in ('ccec/src/ccec_import_pub.c', 'ccrsa/src/ccrsa_import_pub.c',
+                 'ccrsa/src/ccrsa_verify_pkcs1v15_allowshortsigs.c'):
+        if SOURCE / name not in sources:
+            raise SystemExit(f'Missing expected APFS signature wrapper: {name}')
     additions = [SOURCE / name for name in (
         'cckeccak/src/cckeccak.c', 'ccsha3/src/ccsha3_initial_state.c',
         'ccsha3/src/ccsha3_final.c', 'ccsha3/src/ccsha3_256_di.c',
@@ -226,7 +232,8 @@ defined = names(archive, '-U')
 if apfs_kpis:
     required = {'_ccdigest_parallel', '_ccsha3_256_di', '_ccsha3_384_di',
                 '_ccsha3_512_di', '_native_apfs_crypto_kpis_selftest',
-                '_native_apfs_crypto_selftest_result'}
+                '_native_apfs_crypto_selftest_result', '_ccec_import_pub',
+                '_ccrsa_import_pub', '_ccrsa_verify_pkcs1v15_allowshortsigs'}
     if not required <= defined:
         raise SystemExit(f'Missing APFS crypto definitions: {sorted(required - defined)}')
 undefined = names(archive, '-u') - defined

@@ -94,12 +94,22 @@ if [ "$KDK_IOKIT_ABI" != 0 ] && [ "$KDK_IOKIT_ABI" != 1 ]; then
   echo 'XNU_KDK_IOKIT_ABI must be 0 or 1' >&2
   exit 1
 fi
+APFS_CSR=${XNU_APFS_CSR:-0}
+if [ "$APFS_CSR" != 0 ] && [ "$APFS_CSR" != 1 ]; then
+  echo 'XNU_APFS_CSR must be 0 or 1' >&2
+  exit 1
+fi
 mkdir -p "$OUT"
-ABI_PROFILE="iokit-abi-v1:$KDK_IOKIT_ABI"
+ABI_PROFILE="iokit-abi-v2:$KDK_IOKIT_ABI:csr=$APFS_CSR"
 if [ "$(cat "$OUT/.iokit-abi-profile" 2>/dev/null || true)" != "$ABI_PROFILE" ]; then
   rm -rf "$OUT/ios-obj" "$OUT/ios-sym" "$OUT/ios-dst" "$OUT/hdrs-obj" "$OUT/hdrs-sym"
   rm -f "$FAKEROOT/.xnu-$XNU_VERSION-headers"
   printf '%s\n' "$ABI_PROFILE" > "$OUT/.iokit-abi-profile"
+fi
+MASTER_CONFIG_DIR=$ROOT/$WORK/config
+if [ "$APFS_CSR" = 1 ]; then
+  MASTER_CONFIG_DIR=$OUT/apfs-csr-config
+  python3 scripts/prepare-apfs-csr-config.py "$WORK/config" "$MASTER_CONFIG_DIR"
 fi
 if [ "${XNU_NATIVE_UFS_SM8350:-0}" = 1 ]; then
   python3 scripts/prepare-storage-headers.py
@@ -107,7 +117,7 @@ fi
 
 if [ ! -f "$FAKEROOT/.xnu-$XNU_VERSION-headers" ]; then
   make -C "$WORK" installhdrs SDKROOT=macosx ARCH_CONFIGS=ARM64 \
-    MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \
+    MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT MASTERCONFDIR="$MASTER_CONFIG_DIR" \
     RC_DARWIN_KERNEL_VERSION="$XNU_DARWIN" RC_ProjectSourceVersion="$XNU_VERSION" \
     MAKEJOBS=-j"$JOBS" OBJROOT="$OUT/hdrs-obj" SYMROOT="$OUT/hdrs-sym" DSTROOT="$FAKEROOT"
   touch "$FAKEROOT/.xnu-$XNU_VERSION-headers"
@@ -243,6 +253,7 @@ fi
 build_kernel() {
 make ${MAKE_KEEP_GOING[@]+"${MAKE_KEEP_GOING[@]}"} -C "$WORK" "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" KDKROOT="$KDKROOT" \
   ARCH_CONFIGS=ARM64 MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \
+  MASTERCONFDIR="$MASTER_CONFIG_DIR" \
   ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64 LARGE_MEMORY_DEFINE=-UARM_LARGE_MEMORY \
   ARM64_LINK_ADDR=0xfffffff007004000 ARM64_PLKSEG_ADDR=0xfffffff004004000 \
   DEPLOYMENT_TARGET_FLAGS="-miphoneos-version-min=$IOS_MIN -DXNU_TARGET_OS_IOS" \
@@ -270,6 +281,7 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
       # These are runtime imports of the future APFS provider; archive
       # membership alone does not retain otherwise unreferenced selectors.
       ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-u,_ccdigest_parallel,-u,_ccsha3_256_di,-u,_ccsha3_384_di,-u,_ccsha3_512_di"
+      ARCHIVE_FLAGS="$ARCHIVE_FLAGS -Wl,-u,_ccec_import_pub,-u,_ccrsa_import_pub,-u,_ccrsa_verify_pkcs1v15_allowshortsigs"
     fi
   fi
   for component in ArmDTPlatform ArmCpu NativeDwc3Console; do
@@ -310,7 +322,8 @@ kernel = Path(sys.argv[1])
 defined = set(subprocess.check_output(['xcrun', 'nm', '-g', '-U', '-j', kernel], text=True).splitlines())
 required = {'_ccdigest_parallel', '_ccsha3_256_di', '_ccsha3_384_di',
             '_ccsha3_512_di', '_native_apfs_crypto_kpis_selftest',
-            '_native_apfs_crypto_selftest_result'}
+            '_native_apfs_crypto_selftest_result', '_ccec_import_pub',
+            '_ccrsa_import_pub', '_ccrsa_verify_pkcs1v15_allowshortsigs'}
 missing = sorted(required - defined)
 kernel.with_suffix('.apfs-crypto.json').write_text(json.dumps({
     'required_definitions': sorted(required), 'missing': missing,
