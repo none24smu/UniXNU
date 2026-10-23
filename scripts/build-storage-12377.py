@@ -13,7 +13,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from xnu_symbols import kernel_names
-from kdk_iokit_abi import enabled, storage_copy
+from kdk_iokit_abi import enabled, storage_copy, validate_compile_profile
 
 SOURCE = ROOT / 'refer/IOStorageFamily'
 REVISION = '7edb88fbae296fb7c8ce2f64e115e116e566d51c'
@@ -44,9 +44,7 @@ record = json.loads((OBJ / 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json').read_t
 # reference immutable and retain the complete ordinary block-storage path.
 compatibility = enabled()
 print(f'Storage 12377: KDK IOKit ABI profile={int(compatibility)}; iOS target retained', flush=True)
-recorded_profiles = [arg.split('=', 1)[1] for arg in record['arguments'] if arg.startswith('-DXNU_KDK_IOKIT_ABI=')]
-if recorded_profiles not in ([], ['0'], ['1']) or (recorded_profiles == ['1']) != compatibility:
-    raise SystemExit('Storage ABI profile differs from recorded kernel compile flags')
+validate_compile_profile(record['arguments'], compatibility)
 headers = json.loads((ROOT / 'build/storage-abi/headers.json').read_text())
 if headers.get('kdk_iokit_abi', False) != compatibility:
     raise SystemExit('Storage headers and source ABI profiles differ')

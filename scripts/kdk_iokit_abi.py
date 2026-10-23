@@ -22,6 +22,26 @@ def enabled():
     return value == '1'
 
 
+def validate_compile_profile(arguments, compatibility):
+    """Read both driver spelling and Clang -MJ's split -D spelling."""
+    profiles = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument in ('-D', '-U'):
+            index += 1
+            if index >= len(arguments):
+                raise ValueError('Incomplete compiler preprocessor option')
+            argument += arguments[index]
+        if argument.startswith('-DXNU_KDK_IOKIT_ABI='):
+            profiles.append(argument.split('=', 1)[1])
+        elif argument in ('-DXNU_KDK_IOKIT_ABI', '-UXNU_KDK_IOKIT_ABI'):
+            raise ValueError('Storage ABI profile must be explicitly 0 or 1')
+        index += 1
+    if profiles not in ([], ['0'], ['1']) or (profiles == ['1']) != compatibility:
+        raise ValueError('Storage ABI profile differs from recorded kernel compile flags')
+
+
 def storage_copy(name, text, compatibility):
     if not compatibility or name not in GUARDS:
         return text

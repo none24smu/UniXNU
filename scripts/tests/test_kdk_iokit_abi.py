@@ -1,5 +1,6 @@
 """Exercise actual patched-header preprocessing and pinned public storage copies."""
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -16,6 +17,32 @@ STORAGE = Path(os.environ.get('XNU_ABI_STORAGE_SOURCE', ROOT / 'refer/IOStorageF
 
 
 class PublicProfileTests(unittest.TestCase):
+    def test_compile_profile_accepts_clang_json_and_rejects_mixed_profiles(self):
+        for flags in (['-DXNU_KDK_IOKIT_ABI=1'], ['-D', 'XNU_KDK_IOKIT_ABI=1']):
+            P.validate_compile_profile(flags, True)
+            with self.assertRaises(ValueError):
+                P.validate_compile_profile(flags, False)
+        for flags in ([], ['-D', 'XNU_KDK_IOKIT_ABI=0']):
+            P.validate_compile_profile(flags, False)
+            with self.assertRaises(ValueError):
+                P.validate_compile_profile(flags, True)
+        for flags in (['-D'], ['-UXNU_KDK_IOKIT_ABI'], ['-DXNU_KDK_IOKIT_ABI'],
+                      ['-DXNU_KDK_IOKIT_ABI=1', '-D', 'XNU_KDK_IOKIT_ABI=0']):
+            with self.assertRaises(ValueError):
+                P.validate_compile_profile(flags, True)
+
+    @unittest.skipUnless(shutil.which('clang'), 'requires clang')
+    def test_real_clang_compile_record(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / 'profile.c'
+            source.write_text('int profile;\n')
+            record = root / 'profile.json'
+            subprocess.run(['clang', '-DXNU_KDK_IOKIT_ABI=1', '-c', str(source),
+                            '-o', str(root / 'profile.o'), '-MJ', str(record)], check=True)
+            arguments = json.loads(record.read_text().strip().rstrip(','))['arguments']
+            P.validate_compile_profile(arguments, True)
+
     @unittest.skipUnless(STORAGE.is_dir(), 'supply pinned public IOStorageFamily source')
     def test_public_bodies_preserved_and_ios_profile_unchanged(self):
         for name, count in P.GUARDS.items():
