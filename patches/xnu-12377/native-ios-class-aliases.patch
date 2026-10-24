@@ -1,24 +1,25 @@
 --- a/iokit/Kernel/IOUserClient.cpp
 +++ b/iokit/Kernel/IOUserClient.cpp
-@@ -419,9 +419,44 @@ IOTaskRegistryCompatibility(task_t task)
+@@ -419,9 +419,52 @@ IOTaskRegistryCompatibility(task_t task)
  	return false;
  }
  
 +#if defined(XNU_NATIVE_IOS_CLASS_ALIASES) && XNU_NATIVE_IOS_CLASS_ALIASES
 +/*
 + * iOS userland over the macOS KDK kexts: some families publish their root
-+ * service under the macOS class name. IOSurface.framework looks up
++ * service under the macOS class name. IOSurface.framework name-matches
 + * IOCoreSurfaceRoot and aborts when it is missing; the macOS kext's class
-+ * is IOSurfaceRoot. Rewrite the iOS class a task matches on.
++ * (and so its name) is IOSurfaceRoot. Rewrite the iOS class or name a task
++ * matches on.
 + */
 +static const char * const gIOSClassAliases[][2] = {
 +	{ "IOCoreSurfaceRoot", "IOSurfaceRoot" },
 +};
 +
 +static void
-+IOTaskRegistryClassAliases(OSDictionary * matching)
++IOTaskRegistryClassAlias(OSDictionary * matching, const OSSymbol * key)
 +{
-+	OSString * name = OSDynamicCast(OSString, matching->getObject(gIOProviderClassKey));
++	OSString * name = OSDynamicCast(OSString, matching->getObject(key));
 +
 +	if (name == NULL) {
 +		return;
@@ -27,12 +28,19 @@
 +		if (name->isEqualTo(alias[0])) {
 +			const OSSymbol * replacement = OSSymbol::withCString(alias[1]);
 +			if (replacement != NULL) {
-+				matching->setObject(gIOProviderClassKey, replacement);
++				matching->setObject(key, replacement);
 +				replacement->release();
 +			}
 +			return;
 +		}
 +	}
++}
++
++static void
++IOTaskRegistryClassAliases(OSDictionary * matching)
++{
++	IOTaskRegistryClassAlias(matching, gIOProviderClassKey);
++	IOTaskRegistryClassAlias(matching, gIONameMatchKey);
 +}
 +#endif
 +
