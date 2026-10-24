@@ -47,18 +47,19 @@
  		vnode_put(imgp->ip_vp);
 --- a/bsd/kern/kern_exit.c
 +++ b/bsd/kern/kern_exit.c
-@@ -1637,6 +1637,10 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
+@@ -1637,6 +1637,11 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
  /*
   * NOTE: exit_with_reason drops a reference on the passed exit_reason
   */
 +#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE && defined(__arm64__)
 +extern void proc_trace_abort_reason(char *out, size_t capacity);
++extern void proc_trace_abort_frames(void);
 +#endif
 +
  int
  exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, boolean_t perf_notify,
      int jetsam_flags, struct os_reason *exit_reason)
-@@ -1647,6 +1651,25 @@ exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate,
+@@ -1647,6 +1652,26 @@ exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate,
  	int error = 0;
  	bool proc_exiting = false;
  
@@ -73,6 +74,7 @@
 +	if (p == current_proc() && (rv & 0x7f) == SIGABRT) {
 +		char abort_text[320];
 +
++		proc_trace_abort_frames();
 +		proc_trace_abort_reason(abort_text, sizeof(abort_text));
 +		if (abort_text[0] != 0) {
 +			printf("proc-trace: abort pid %d %s: %s\n", proc_getpid(p), p->p_comm, abort_text);
@@ -86,7 +88,7 @@
  	 * Debug boot-arg: panic here if matching process is exiting with non-zero code.
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -133,6 +133,148 @@ extern int      proc_selfpid(void);
+@@ -133,6 +133,189 @@ extern int      proc_selfpid(void);
  extern char     *proc_name_address(struct proc *p);
  #endif /* MACH_BSD */
  
@@ -165,6 +167,47 @@
 +}
 +
 +void proc_trace_abort_reason(char *out, size_t capacity);
++void proc_trace_abort_frames(void);
++
++/*
++ * abort() raises SIGABRT on the calling thread, which takes the signal and
++ * exits: its user state is the abort site. Print it like an exception.
++ */
++void
++proc_trace_abort_frames(void)
++{
++	task_t task = current_task();
++	struct arm_saved_state *state = get_user_regs(current_thread());
++	vm_shared_region_t shared_region;
++	mach_vm_offset_t cache = 0;
++	uint64_t frame[2], fp;
++
++	if (state == NULL || !is_saved_state64(state)) {
++		return;
++	}
++	shared_region = vm_shared_region_get(task);
++	if (shared_region != NULL) {
++		if (vm_shared_region_start_address(shared_region, &cache) != KERN_SUCCESS) {
++			cache = 0;
++		}
++		vm_shared_region_deallocate(shared_region);
++	}
++	printf("proc-trace: abort pid %d %s pc 0x%llx lr 0x%llx sp 0x%llx cache 0x%llx\n",
++	    proc_pid(get_bsdtask_info(task)), proc_name_address(get_bsdtask_info(task)),
++	    (uint64_t)get_saved_state_pc(state), (uint64_t)get_saved_state_lr(state),
++	    (uint64_t)get_saved_state_sp(state), (uint64_t)cache);
++	fp = (uint64_t)get_saved_state_fp(state);
++	for (int depth = 0; depth < 24 && fp != 0 && (fp & 0xf) == 0; depth++) {
++		if (copyin((user_addr_t)fp, frame, sizeof(frame)) != 0) {
++			break;
++		}
++		printf("proc-trace:  frame %d 0x%llx\n", depth, (unsigned long long)frame[1]);
++		if (frame[0] <= fp) {
++			break;
++		}
++		fp = frame[0];
++	}
++}
 +
 +void
 +proc_trace_abort_reason(char *out, size_t capacity)
@@ -235,7 +278,7 @@
  #if (DEVELOPMENT || DEBUG)
  TUNABLE_WRITEABLE(unsigned int, exception_log_max_pid, "exception_log_max_pid", 0);
  #endif /* (DEVELOPMENT || DEBUG) */
-@@ -932,6 +1074,15 @@ exception_triage(
+@@ -932,6 +1115,15 @@ exception_triage(
  		}
  	}
  
