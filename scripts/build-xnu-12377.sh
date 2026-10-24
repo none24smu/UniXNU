@@ -287,6 +287,11 @@ rebuild_on_change boot-progress-mode "$BOOT_PROGRESS" $BOOT_PROGRESS_OBJECTS
 NATIVE_LEGACY_DISPLAY=$(flag XNU_NATIVE_LEGACY_DISPLAY)
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_LEGACY_DISPLAY=$NATIVE_LEGACY_DISPLAY"
 rebuild_on_change native-legacy-display-mode "$NATIVE_LEGACY_DISPLAY" bsd/DEVELOPMENT/bsd_init.o
+# iOS userland over the macOS KDK kexts: user matching on an iOS-only class name (IOCoreSurfaceRoot) is rewritten to the
+# macOS class that publishes the service (patches/xnu-12377/native-ios-class-aliases.patch). Both passes compile it.
+IOS_CLASS_ALIASES=$(flag XNU_NATIVE_IOS_CLASS_ALIASES)
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_NATIVE_IOS_CLASS_ALIASES=$IOS_CLASS_ALIASES"
+rebuild_on_change ios-class-aliases-mode "$IOS_CLASS_ALIASES" iokit/DEVELOPMENT/IOUserClient.cpo
 if [ "$SOURCE_CRYPTO" = 1 ]; then
   EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_SOURCE_CORECRYPTO14=1"
 fi
