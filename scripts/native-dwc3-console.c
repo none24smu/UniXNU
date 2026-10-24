@@ -47,7 +47,7 @@ static uintptr_t registers;
 static uint64_t dma_physical, frequency;
 static bool active, configured, busy, direction_in, three_stage, status_started, initialization_attempted;
 static bool qcom_usb0;
-static unsigned ep0_state, event_position, packet_size = 512, command_position;
+static unsigned ep0_state, event_position, packet_size = 512, command_positions[2];
 static uint32_t transfer_length[EP_COUNT], resources[EP_COUNT];
 static bool transfer_active[EP_COUNT];
 static uint8_t ring[RING_BYTES];
@@ -236,20 +236,26 @@ static void send_pending(void)
     for (unsigned i = 0; i < bytes; i++) dma.transmit[i] = ring[(ring_tail + i) % RING_BYTES];
     if (transfer(3, dma.transmit, bytes, 1)) transfer_end = ring_tail + bytes;
 }
+// Host commands on the log's OUT endpoint, each "\0ZETA:<name>\n": return to the bootloader, or count one Home press for the board's
+// HID input (zeta kits/zeta/HidInputProbe.cpp reads unixnu_dwc3_home_requests).
+volatile uint32_t unixnu_dwc3_home_requests;
 static void receive_command(unsigned length)
 {
-    static const uint8_t command_bytes[] = "\0ZETA:REBOOT-BOOTLOADER\n";
+    static const char *const commands[] = {"\0ZETA:REBOOT-BOOTLOADER\n", "\0ZETA:HOME\n"};
+    static const unsigned lengths[] = {sizeof("\0ZETA:REBOOT-BOOTLOADER\n") - 1, sizeof("\0ZETA:HOME\n") - 1};
     cache_sync(dma.receive, sizeof(dma.receive));
     for (unsigned i = 0; i < length; i++) {
         uint8_t c = dma.receive[i];
-        if (c == command_bytes[command_position]) {
-            if (++command_position == sizeof(command_bytes) - 1) {
+        for (unsigned k = 0; k < 2; k++) {
+            if (c != (uint8_t)commands[k][command_positions[k]]) { command_positions[k] = c == 0 ? 1 : 0; continue; }
+            if (++command_positions[k] != lengths[k]) continue;
+            command_positions[k] = 0;
+            if (k == 0) {
                 static const char reply[] = "XNUUSB: returning to bootloader\n";
-                command_position = 0;
                 for (unsigned j = 0; j < sizeof(reply) - 1; j++) append((uint8_t)reply[j]);
                 reset_deadline = ticks() + frequency / 5;
-            }
-        } else command_position = c == 0 ? 1 : 0;
+            } else unixnu_dwc3_home_requests = unixnu_dwc3_home_requests + 1;
+        }
     }
 }
 static void endpoint_event(uint32_t event)
@@ -298,7 +304,7 @@ void unixnu_dwc3_poll(void)
         else if (((event >> 1) & 127) == 0) {
             unsigned kind = (event >> 8) & 15;
             if (kind == 0 || kind == 1) {
-                configured = false; command_position = 0;
+                configured = false; command_positions[0] = command_positions[1] = 0;
                 for (unsigned ep = 0; ep < EP_COUNT; ep++) end_transfer(ep);
                 write_reg(DCFG, read_reg(DCFG) & ~(127u << 3));
                 if (kind == 1) arm_setup();
