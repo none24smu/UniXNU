@@ -1,6 +1,6 @@
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -1898,6 +1898,24 @@
+@@ -1898,6 +1898,24 @@ SYSCTL_PROC(_vm, OID_AUTO, shared_region_control,
      0, 0, rsr_version_sysctl, "I", "");
  #endif /* XNU_TARGET_OS_OSX */
  
@@ -25,7 +25,7 @@
  /*
   * exec_mach_imgact
   *
-@@ -5563,6 +5581,9 @@
+@@ -5563,6 +5581,9 @@ bad:
  	if (!error && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)) {
  		proc_knote(p, NOTE_EXEC);
  	}
@@ -35,7 +35,7 @@
  
  	if (imgp != NULL) {
  		uthread_set_exec_data(current_uthread(), NULL);
-@@ -6204,6 +6225,9 @@
+@@ -6204,6 +6225,9 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
  	if (exec_done && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)) {
  		proc_knote(p, NOTE_EXEC);
  	}
@@ -47,7 +47,18 @@
  		vnode_put(imgp->ip_vp);
 --- a/bsd/kern/kern_exit.c
 +++ b/bsd/kern/kern_exit.c
-@@ -1647,6 +1647,15 @@
+@@ -1637,6 +1637,10 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
+ /*
+  * NOTE: exit_with_reason drops a reference on the passed exit_reason
+  */
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE && defined(__arm64__)
++extern void proc_trace_abort_reason(char *out, size_t capacity);
++#endif
++
+ int
+ exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, boolean_t perf_notify,
+     int jetsam_flags, struct os_reason *exit_reason)
+@@ -1647,6 +1651,25 @@ exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate,
  	int error = 0;
  	bool proc_exiting = false;
  
@@ -58,6 +69,16 @@
 +	    exit_reason != OS_REASON_NULL ? exit_reason->osr_namespace : 0,
 +	    exit_reason != OS_REASON_NULL ? exit_reason->osr_code : 0ULL,
 +	    exit_desc != NULL ? " " : "", exit_desc != NULL ? exit_desc : "");
++#if defined(__arm64__)
++	if (p == current_proc() && (rv & 0x7f) == SIGABRT) {
++		char abort_text[320];
++
++		proc_trace_abort_reason(abort_text, sizeof(abort_text));
++		if (abort_text[0] != 0) {
++			printf("proc-trace: abort pid %d %s: %s\n", proc_getpid(p), p->p_comm, abort_text);
++		}
++	}
++#endif
 +#endif
 +
  #if DEVELOPMENT || DEBUG
@@ -65,13 +86,14 @@
  	 * Debug boot-arg: panic here if matching process is exiting with non-zero code.
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -133,6 +133,60 @@ extern int      proc_selfpid(void);
+@@ -133,6 +133,142 @@ extern int      proc_selfpid(void);
  extern char     *proc_name_address(struct proc *p);
  #endif /* MACH_BSD */
  
 +#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE && defined(__arm64__)
 +#include <arm/thread.h>
 +#include <vm/vm_shared_region_internal.h>
++#include <vm/vm_map_internal.h>
 +
 +/*
 + * Print the user registers, a frame-pointer backtrace and the shared cache
@@ -121,12 +143,93 @@
 +		fp = frame[0];
 +	}
 +}
++
++/*
++ * SIGABRT carries no text: the reason sits in the malloc heap of the aborting
++ * process ("*** Terminating app due to uncaught exception", "Assertion failed",
++ * "Fatal error"). Scan the writable malloc regions of the calling task for the
++ * best printable run, as the sheng fault probe does (package/BootFaultProbe.c).
++ */
++#define PROC_TRACE_REASON_CHUNK 65536
++static char proc_trace_reason_chunk[PROC_TRACE_REASON_CHUNK];
++static int proc_trace_reason_busy;
++
++static int
++proc_trace_reason_rank(const char *run, size_t length)
++{
++	if (strnstr(run, "uncaught exception", length) != NULL || strnstr(run, "Assertion fail", length) != NULL ||
++	    strnstr(run, "Fatal error", length) != NULL || strnstr(run, "BUG IN", length) != NULL) {
++		return 2;
++	}
++	return strnstr(run, "reason: ", length) != NULL ? 1 : 0;
++}
++
++void proc_trace_abort_reason(char *out, size_t capacity);
++
++void
++proc_trace_abort_reason(char *out, size_t capacity)
++{
++	vm_map_t map = current_map();
++	vm_map_offset_t address = 0;
++	uint64_t scanned = 0;
++	int best = 0;
++
++	if (capacity == 0) {
++		return;
++	}
++	out[0] = 0;
++	if (__atomic_exchange_n(&proc_trace_reason_busy, 1, __ATOMIC_ACQUIRE)) {
++		return;
++	}
++	while (scanned < (160ULL << 20) && best < 2) {
++		vm_map_offset_ut address_u = vm_sanitize_wrap_addr(address);
++		vm_map_size_ut size_u = vm_sanitize_wrap_size(0);
++		vm_region_submap_info_data_64_t info;
++		mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_V2_COUNT_64;
++		natural_t depth = 0;
++
++		if (vm_map_region_recurse_64(map, &address_u, &size_u, &depth, &info, &count) != KERN_SUCCESS) {
++			break;
++		}
++		vm_map_offset_t base = VM_SANITIZE_UNSAFE_UNWRAP(address_u);
++		vm_map_size_t size = VM_SANITIZE_UNSAFE_UNWRAP(size_u);
++		address = base + size;
++		if (info.is_submap || (info.protection & (VM_PROT_READ | VM_PROT_WRITE)) != (VM_PROT_READ | VM_PROT_WRITE) ||
++		    info.user_tag < VM_MEMORY_MALLOC || info.user_tag > VM_MEMORY_MALLOC_NANO) {
++			continue;
++		}
++		for (vm_map_size_t offset = 0; offset < size && best < 2; offset += PROC_TRACE_REASON_CHUNK) {
++			size_t length = size - offset < PROC_TRACE_REASON_CHUNK ? (size_t)(size - offset) : PROC_TRACE_REASON_CHUNK;
++			size_t start = 0;
++
++			if (copyin((user_addr_t)(base + offset), proc_trace_reason_chunk, length) != 0) {
++				continue;
++			}
++			scanned += length;
++			for (size_t i = 0; i <= length && best < 2; i++) {
++				if (i < length && proc_trace_reason_chunk[i] >= 0x20 && proc_trace_reason_chunk[i] < 0x7f) {
++					continue;
++				}
++				size_t run = i - start;
++				int rank = run >= 24 ? proc_trace_reason_rank(proc_trace_reason_chunk + start, run) : 0;
++				if (rank > best) {
++					size_t copied = run < capacity - 1 ? run : capacity - 1;
++					memcpy(out, proc_trace_reason_chunk + start, copied);
++					out[copied] = 0;
++					best = rank;
++				}
++				start = i + 1;
++			}
++		}
++	}
++	__atomic_store_n(&proc_trace_reason_busy, 0, __ATOMIC_RELEASE);
++}
 +#endif
 +
  #if (DEVELOPMENT || DEBUG)
  TUNABLE_WRITEABLE(unsigned int, exception_log_max_pid, "exception_log_max_pid", 0);
  #endif /* (DEVELOPMENT || DEBUG) */
-@@ -932,6 +986,15 @@ exception_triage(
+@@ -932,6 +1068,15 @@ exception_triage(
  		}
  	}
  
