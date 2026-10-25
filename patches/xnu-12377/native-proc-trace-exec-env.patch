@@ -1,0 +1,57 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 32a5bc6..6c4380a 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -6921,6 +6921,52 @@ exec_extract_strings(struct image_params *imgp)
+ 		imgp->ip_envc++;
+ 	}
+ 
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE
++	/*
++	 * native-exec-env=<name>:<VAR=value>[,<VAR=value>...]: environment strings appended to the exec of the
++	 * executable whose last path component is <name>. A bring-up switch for a launchd job, such as one of
++	 * QuartzCore's CA_* debug values for backboardd, without rebuilding the root volume.
++	 */
++	{
++		static char exec_env[256];
++		static int exec_env_state = -1;
++		if (exec_env_state < 0) {
++			exec_env_state = PE_parse_boot_arg_str("native-exec-env", exec_env, sizeof(exec_env)) ? 1 : 0;
++		}
++		const char *colon = exec_env_state ? strchr(exec_env, ':') : NULL;
++		const char *path = imgp->ip_strings + strlen(EXECUTABLE_KEY);
++		const char *base = strrchr(path, '/');
++		base = base != NULL ? base + 1 : path;
++		if (colon != NULL && (size_t)(colon - exec_env) == strlen(base) &&
++		    strncmp(exec_env, base, (size_t)(colon - exec_env)) == 0) {
++			char one[128];
++			for (const char *c = colon + 1; *c != '\0';) {
++				const char *e = c;
++				while (*e != '\0' && *e != ',') {
++					e++;
++				}
++				size_t n = (size_t)(e - c);
++				if (n != 0 && n < sizeof(one)) {
++					memcpy(one, c, n);
++					one[n] = '\0';
++					error = exec_add_user_string(imgp, CAST_USER_ADDR_T(one), UIO_SYSSPACE, TRUE);
++					if (error) {
++						goto bad;
++					}
++					if (imgp->ip_argspace < new_ptr_size) {
++						error = E2BIG;
++						goto bad;
++					}
++					imgp->ip_argspace -= new_ptr_size;
++					imgp->ip_envc++;
++					printf("proc-trace: exec env %s += %s\n", base, one);
++				}
++				c = *e != '\0' ? e + 1 : e;
++			}
++		}
++	}
++#endif
++
+ 	/* Save space for envv[] NULL terminator */
+ 	if (imgp->ip_argspace < new_ptr_size) {
+ 		error = E2BIG;
