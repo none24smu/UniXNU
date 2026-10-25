@@ -1,6 +1,6 @@
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -1898,6 +1898,24 @@ SYSCTL_PROC(_vm, OID_AUTO, shared_region_control,
+@@ -1898,6 +1898,24 @@ SYSCTL_PROC(_vm, OID_AUTO, shared_region
      0, 0, rsr_version_sysctl, "I", "");
  #endif /* XNU_TARGET_OS_OSX */
  
@@ -35,7 +35,7 @@
  
  	if (imgp != NULL) {
  		uthread_set_exec_data(current_uthread(), NULL);
-@@ -6204,6 +6225,9 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
+@@ -6204,6 +6225,9 @@ __mac_execve(proc_t p, struct __mac_exec
  	if (exec_done && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)) {
  		proc_knote(p, NOTE_EXEC);
  	}
@@ -47,19 +47,20 @@
  		vnode_put(imgp->ip_vp);
 --- a/bsd/kern/kern_exit.c
 +++ b/bsd/kern/kern_exit.c
-@@ -1637,6 +1637,11 @@ exit1_internal(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, bo
+@@ -1637,6 +1637,12 @@ exit1_internal(proc_t p, int rv, int *re
  /*
   * NOTE: exit_with_reason drops a reference on the passed exit_reason
   */
 +#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE && defined(__arm64__)
 +extern void proc_trace_abort_reason(char *out, size_t capacity);
 +extern void proc_trace_abort_frames(void);
++extern void proc_trace_watchdog_frames(void);
 +#endif
 +
  int
  exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, boolean_t perf_notify,
      int jetsam_flags, struct os_reason *exit_reason)
-@@ -1647,6 +1652,26 @@ exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate,
+@@ -1647,6 +1653,34 @@ exit_with_reason(proc_t p, int rv, int *
  	int error = 0;
  	bool proc_exiting = false;
  
@@ -80,6 +81,14 @@
 +			printf("proc-trace: abort pid %d %s: %s\n", proc_getpid(p), p->p_comm, abort_text);
 +		}
 +	}
++	/*
++	 * A watchdog kill (FrontBoard's 0x8badf00d: a main thread that held a scene update past its allowance) is a
++	 * SIGKILL the killed process takes itself: its threads still stand where they waited, so they are printed too.
++	 */
++	if (p == current_proc() && (rv & 0x7f) == SIGKILL && exit_reason != OS_REASON_NULL &&
++	    exit_reason->osr_namespace == OS_REASON_FRONTBOARD) {
++		proc_trace_watchdog_frames();
++	}
 +#endif
 +#endif
 +
@@ -88,7 +97,7 @@
  	 * Debug boot-arg: panic here if matching process is exiting with non-zero code.
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -133,6 +133,257 @@ extern int      proc_selfpid(void);
+@@ -133,6 +133,274 @@ extern int      proc_selfpid(void);
  extern char     *proc_name_address(struct proc *p);
  #endif /* MACH_BSD */
  
@@ -176,6 +185,8 @@
 + * under the task lock and the frames read after it is dropped.
 + */
 +#define PROC_TRACE_SIBLINGS 64
++/* Frames per sibling: 10 for an abort; a watchdog kill walks 40, since the waiting call sits under the runtime that waits. */
++static int proc_trace_sibling_depth = 10;
 +static struct {
 +	uint64_t tid, pc, lr, fp;
 +	int state;
@@ -221,9 +232,13 @@
 +		    proc_trace_siblings[i].name[0] ? proc_trace_siblings[i].name : "-",
 +		    proc_trace_siblings[i].pc, proc_trace_siblings[i].lr);
 +
-+		for (int depth = 0; depth < 10 && fp != 0 && (fp & 0xf) == 0 && used > 0 && used < (int)sizeof(line) - 20; depth++) {
++		for (int depth = 0; depth < proc_trace_sibling_depth && fp != 0 && (fp & 0xf) == 0 && used > 0; depth++) {
 +			if (copyin((user_addr_t)fp, frame, sizeof(frame)) != 0) {
 +				break;
++			}
++			if (used >= (int)sizeof(line) - 20) {
++				printf("%s\n", line);
++				used = snprintf(line, sizeof(line), "proc-trace:   ...");
 +			}
 +			used += snprintf(line + used, sizeof(line) - used, " 0x%llx", (unsigned long long)frame[1]);
 +			if (frame[0] <= fp) {
@@ -275,6 +290,17 @@
 +		fp = frame[0];
 +	}
 +	proc_trace_abort_siblings(task);
++}
++
++void proc_trace_watchdog_frames(void);
++
++/* The killed thread's own frames, then every other thread's, as for an abort. */
++void
++proc_trace_watchdog_frames(void)
++{
++	proc_trace_sibling_depth = 40;
++	proc_trace_abort_frames();
++	proc_trace_sibling_depth = 10;
 +}
 +
 +void
@@ -346,7 +372,7 @@
  #if (DEVELOPMENT || DEBUG)
  TUNABLE_WRITEABLE(unsigned int, exception_log_max_pid, "exception_log_max_pid", 0);
  #endif /* (DEVELOPMENT || DEBUG) */
-@@ -932,6 +1183,15 @@ exception_triage(
+@@ -932,6 +1200,15 @@ exception_triage(
  		}
  	}
  
