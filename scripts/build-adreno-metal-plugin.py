@@ -33,11 +33,16 @@ BRIDGE = ROOT / 'build/native-metal-bridge/ios/libnative_metal_bridge.a'
 pm4 = OUT / 'AdrenoPM4.o'
 subprocess.run([*base, '-std=c11', '-c', ROOT / 'kits/AdrenoPM4/AdrenoPM4.c', '-o', pm4], check=True)
 exe = bundle / 'NativeAdrenoMetal'
+# The frontend's classes derive from Metal's private bases (NativeBridgeMetalFrontend.mm, "Metal's own bases"). Metal.framework exports
+# them; should an SDK's stub library not list one, it is looked up when the bundle loads instead of failing the link.
+METAL_BASES = ['_MTLResource', '_MTLCommandQueue', '_MTLCommandBuffer', '_MTLCommandEncoder', '_MTLComputePipelineState',
+               '_MTLRenderPipelineState', '_MTLSamplerState', '_MTLDepthStencilState']
+metal_bases = [f'-Wl,-U,_OBJC_{kind}_$_{name}' for name in METAL_BASES for kind in ('CLASS', 'METACLASS')]
 subprocess.run([*(['xcrun', 'clang++'] + base[2:]), '-std=c++17', '-fobjc-arc', '-Wno-deprecated-declarations', '-bundle',
                 '-I', ROOT / 'drivers/NativeAdreno', '-I', ROOT / 'kits/AdrenoPM4', '-I', VULKAN_INCLUDE, '-I', ROOT / 'build/turnip-smoke',
                 '-x', 'objective-c++', ROOT / 'drivers/NativeMetal/NativeAdrenoMetalPlugin.mm',
                 ROOT / 'drivers/NativeMetal/NativeBridgeMetalFrontend.mm', '-x', 'none', pm4, BRIDGE,
-                '-Wl,-dead_strip', '-lobjc', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOSurface', '-o', exe], check=True)
+                '-Wl,-dead_strip', *metal_bases, '-lobjc', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOSurface', '-o', exe], check=True)
 subprocess.run(['strip', '-x', exe], check=True)
 # The linker writes the debug symbols of the Rust bridge next to the executable; keep them beside the bundle, not in the image.
 symbols = OUT / 'NativeAdrenoMetal.dSYM'
