@@ -1,6 +1,6 @@
 --- a/iokit/Kernel/IOUserClient.cpp
 +++ b/iokit/Kernel/IOUserClient.cpp
-@@ -419,9 +419,52 @@ IOTaskRegistryCompatibility(task_t task)
+@@ -419,9 +419,55 @@ IOTaskRegistryCompatibility(task_t task)
  	return false;
  }
  
@@ -10,10 +10,13 @@
 + * service under the macOS class name. IOSurface.framework name-matches
 + * IOCoreSurfaceRoot and aborts when it is missing; the macOS kext's class
 + * (and so its name) is IOSurfaceRoot. Rewrite the iOS class or name a task
-+ * matches on.
++ * matches on. Metal's device discovery (_MTLRegisterDevices) class-matches
++ * IOAcceleratorES, which no KDK kext provides: the board's NativeAdreno
++ * service (NativeAdrenoGpuPublished, MetalPluginName on it) answers it.
 + */
 +static const char * const gIOSClassAliases[][2] = {
 +	{ "IOCoreSurfaceRoot", "IOSurfaceRoot" },
++	{ "IOAcceleratorES", "NativeAdrenoGpuPublished" },
 +};
 +
 +static void
