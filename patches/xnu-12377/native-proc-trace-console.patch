@@ -88,7 +88,7 @@
  	 * Debug boot-arg: panic here if matching process is exiting with non-zero code.
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -133,6 +133,189 @@ extern int      proc_selfpid(void);
+@@ -133,6 +133,257 @@ extern int      proc_selfpid(void);
  extern char     *proc_name_address(struct proc *p);
  #endif /* MACH_BSD */
  
@@ -170,8 +170,75 @@
 +void proc_trace_abort_frames(void);
 +
 +/*
++ * The other threads of the aborting task, from their last entry into the
++ * kernel: a thread blocked in a call shows where it waits, so an abort that
++ * is a race with another thread names that thread's code. The rows are taken
++ * under the task lock and the frames read after it is dropped.
++ */
++#define PROC_TRACE_SIBLINGS 64
++static struct {
++	uint64_t tid, pc, lr, fp;
++	int state;
++	char name[32];
++} proc_trace_siblings[PROC_TRACE_SIBLINGS];
++
++static void
++proc_trace_abort_siblings(task_t task)
++{
++	unsigned count = 0, total = 0;
++	thread_t thread;
++
++	task_lock(task);
++	queue_iterate(&task->threads, thread, thread_t, task_threads) {
++		struct arm_saved_state *state;
++		char name[64];	/* MAXTHREADNAMESIZE */
++
++		total++;
++		if (thread == current_thread() || count >= PROC_TRACE_SIBLINGS) {
++			continue;
++		}
++		state = get_user_regs(thread);
++		if (state == NULL || !is_saved_state64(state)) {
++			continue;
++		}
++		proc_trace_siblings[count].tid = thread_tid(thread);
++		proc_trace_siblings[count].pc = get_saved_state_pc(state);
++		proc_trace_siblings[count].lr = get_saved_state_lr(state);
++		proc_trace_siblings[count].fp = get_saved_state_fp(state);
++		proc_trace_siblings[count].state = thread->state;
++		name[0] = 0;
++		thread_get_thread_name(thread, name);
++		strlcpy(proc_trace_siblings[count].name, name, sizeof(proc_trace_siblings[count].name));
++		count++;
++	}
++	task_unlock(task);
++	printf("proc-trace: abort threads %u (aborting tid 0x%llx)\n", total, thread_tid(current_thread()));
++	for (unsigned i = 0; i < count; i++) {
++		char line[240];
++		uint64_t frame[2], fp = proc_trace_siblings[i].fp;
++		int used = snprintf(line, sizeof(line), "proc-trace:  thread 0x%llx st %x %s pc 0x%llx lr 0x%llx",
++		    proc_trace_siblings[i].tid, proc_trace_siblings[i].state,
++		    proc_trace_siblings[i].name[0] ? proc_trace_siblings[i].name : "-",
++		    proc_trace_siblings[i].pc, proc_trace_siblings[i].lr);
++
++		for (int depth = 0; depth < 10 && fp != 0 && (fp & 0xf) == 0 && used > 0 && used < (int)sizeof(line) - 20; depth++) {
++			if (copyin((user_addr_t)fp, frame, sizeof(frame)) != 0) {
++				break;
++			}
++			used += snprintf(line + used, sizeof(line) - used, " 0x%llx", (unsigned long long)frame[1]);
++			if (frame[0] <= fp) {
++				break;
++			}
++			fp = frame[0];
++		}
++		printf("%s\n", line);
++	}
++}
++
++/*
 + * abort() raises SIGABRT on the calling thread, which takes the signal and
-+ * exits: its user state is the abort site. Print it like an exception.
++ * exits: its user state is the abort site. Print it like an exception, then
++ * the task's other threads.
 + */
 +void
 +proc_trace_abort_frames(void)
@@ -197,7 +264,7 @@
 +	    (uint64_t)get_saved_state_pc(state), (uint64_t)get_saved_state_lr(state),
 +	    (uint64_t)get_saved_state_sp(state), (uint64_t)cache);
 +	fp = (uint64_t)get_saved_state_fp(state);
-+	for (int depth = 0; depth < 24 && fp != 0 && (fp & 0xf) == 0; depth++) {
++	for (int depth = 0; depth < 48 && fp != 0 && (fp & 0xf) == 0; depth++) {
 +		if (copyin((user_addr_t)fp, frame, sizeof(frame)) != 0) {
 +			break;
 +		}
@@ -207,6 +274,7 @@
 +		}
 +		fp = frame[0];
 +	}
++	proc_trace_abort_siblings(task);
 +}
 +
 +void
@@ -278,7 +346,7 @@
  #if (DEVELOPMENT || DEBUG)
  TUNABLE_WRITEABLE(unsigned int, exception_log_max_pid, "exception_log_max_pid", 0);
  #endif /* (DEVELOPMENT || DEBUG) */
-@@ -932,6 +1115,15 @@ exception_triage(
+@@ -932,6 +1183,15 @@ exception_triage(
  		}
  	}
  
