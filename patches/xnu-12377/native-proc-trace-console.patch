@@ -97,7 +97,7 @@
  	 * Debug boot-arg: panic here if matching process is exiting with non-zero code.
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -133,6 +133,278 @@ extern int      proc_selfpid(void);
+@@ -133,6 +133,282 @@ extern int      proc_selfpid(void);
  extern char     *proc_name_address(struct proc *p);
  #endif /* MACH_BSD */
  
@@ -170,10 +170,14 @@
 +{
 +	/* The plugin's exception record (ExceptionDiag.h: name, reason and the throw's frames) outranks libc++abi's bare "uncaught exception". */
 +	if (strnstr(run, "SHENGTHROW ", length) != NULL) {
-+		return 3;
++		return 4;
 +	}
 +	if (strnstr(run, "uncaught exception", length) != NULL || strnstr(run, "Assertion fail", length) != NULL ||
 +	    strnstr(run, "Fatal error", length) != NULL || strnstr(run, "BUG IN", length) != NULL) {
++		return 3;
++	}
++	/* The Metal frontend's latest refusal: what an abort_with_reason caller ("Metal failed to build compute pipeline") was refused. */
++	if (strnstr(run, "SHENGPROBLEM ", length) != NULL) {
 +		return 2;
 +	}
 +	return strnstr(run, "reason: ", length) != NULL ? 1 : 0;
@@ -322,7 +326,7 @@
 +	if (__atomic_exchange_n(&proc_trace_reason_busy, 1, __ATOMIC_ACQUIRE)) {
 +		return;
 +	}
-+	while (scanned < (160ULL << 20) && best < 2) {
++	while (scanned < (160ULL << 20) && best < 3) {
 +		/* The _ut types are wrapped structs or plain integers by configuration; both hold one 64-bit word. */
 +		vm_map_offset_ut address_u;
 +		vm_map_size_ut size_u;
@@ -345,7 +349,7 @@
 +		    info.user_tag < VM_MEMORY_MALLOC || info.user_tag > VM_MEMORY_MALLOC_NANO) {
 +			continue;
 +		}
-+		for (vm_map_size_t offset = 0; offset < size && best < 3; offset += PROC_TRACE_REASON_CHUNK) {
++		for (vm_map_size_t offset = 0; offset < size && best < 4; offset += PROC_TRACE_REASON_CHUNK) {
 +			size_t length = size - offset < PROC_TRACE_REASON_CHUNK ? (size_t)(size - offset) : PROC_TRACE_REASON_CHUNK;
 +			size_t start = 0;
 +
@@ -353,7 +357,7 @@
 +				continue;
 +			}
 +			scanned += length;
-+			for (size_t i = 0; i <= length && best < 3; i++) {
++			for (size_t i = 0; i <= length && best < 4; i++) {
 +				if (i < length && proc_trace_reason_chunk[i] >= 0x20 && proc_trace_reason_chunk[i] < 0x7f) {
 +					continue;
 +				}
