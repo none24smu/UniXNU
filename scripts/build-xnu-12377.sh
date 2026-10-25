@@ -202,8 +202,14 @@ rebuild_on_change() {
 # BCM2837 start.s routes the core timers through the Raspberry Pi local interrupt controller (physical 0x40000040)
 # before the MMU is on; other boards need it off and use ArmCpu's GICv3 provider.
 NATIVE_ARCH_TIMER=$(flag XNU_NATIVE_ARCH_TIMER)
-EXTRA_MAKE_ARGS+=("start.o_SFLAGS_ADD=-DXNU_NATIVE_ARCH_TIMER=$NATIVE_ARCH_TIMER")
+# A secondary core's progress through its reset path, MMU-off steps included (patches/xnu-12377/native-smp-trace.patch).
+NATIVE_SMP_TRACE=$(flag XNU_NATIVE_SMP_TRACE)
+EXTRA_MAKE_ARGS+=("start.o_SFLAGS_ADD=-DXNU_NATIVE_ARCH_TIMER=$NATIVE_ARCH_TIMER -DXNU_NATIVE_SMP_TRACE=$NATIVE_SMP_TRACE")
+EXTRA_MAKE_ARGS+=("arm_init.o_CFLAGS_ADD=-DXNU_NATIVE_SMP_TRACE=$NATIVE_SMP_TRACE")
+EXTRA_MAKE_ARGS+=("cpu.o_CFLAGS_ADD=-DXNU_NATIVE_SMP_TRACE=$NATIVE_SMP_TRACE")
 rebuild_on_change native-arch-timer-mode "$NATIVE_ARCH_TIMER" osfmk/DEVELOPMENT/start.o
+rebuild_on_change native-smp-trace-mode "$NATIVE_SMP_TRACE" osfmk/DEVELOPMENT/start.o osfmk/DEVELOPMENT/arm_init.o \
+  osfmk/DEVELOPMENT/cpu.o
 # An EL1 port may have access to the virtual timer while physical-timer control traps.
 VIRTUAL_TIMER_ONLY=$(flag XNU_VIRTUAL_TIMER_ONLY)
 EXTRA_MAKE_ARGS+=("machine_routines.o_CFLAGS_ADD=-DXNU_VIRTUAL_TIMER_ONLY=$VIRTUAL_TIMER_ONLY")

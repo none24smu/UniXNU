@@ -72,6 +72,7 @@ Each `CONFIG_XNU_<NAME>` line becomes `XNU_<NAME>` in the kernel build environme
 | `XNU_NATIVE_CS_HASH_CACHE` | Derives 4 KiB code signature hashes from verified 16 KiB blocks | none |
 | `XNU_NATIVE_ARCH_TIMER` | Uses the architectural timer entry | none |
 | `XNU_NATIVE_PAN` | Enables ARMv8.1 PAN support | none |
+| `XNU_NATIVE_SMP_TRACE` | Records each secondary core's reset-path steps | none |
 | `XNU_DT_PANIC_REGION` | Reads the panic region from the device tree | none |
 | `XNU_TRUST_CACHE_RUNTIME` | Initializes the trust cache runtime | none |
 | `XNU_BOOT_PROGRESS` | Adds the boot progress layer | `build/boot-progress/libBootProgress.a` |

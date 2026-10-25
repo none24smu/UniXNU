@@ -1,0 +1,83 @@
+--- a/ArmCpu.cpp
++++ b/ArmCpu.cpp
+@@ -41,6 +41,14 @@
+ // System registers seen on each secondary core at initCPU entry: CurrentEL, SCTLR_EL1, TCR_EL1, MAIR_EL1 (low words), MIDR_EL1.
+ volatile uint32_t armcpu_smp_sys[8][5], armcpu_boot_sys[5];
+ volatile int32_t armcpu_smp_psci_rc[8];
++// Every step a core reached, one bit per step: armcpu_smp_step keeps only the last, and XNU 12377's ml_processor_register
++// runs startCPU (step 4) before finishSecondary records step 2.
++volatile uint32_t armcpu_smp_steps_seen[8];
++static void smpStep (uint32_t id, uint32_t step)
++{
++  armcpu_smp_step[id] = step;
++  __atomic_fetch_or (&armcpu_smp_steps_seen[id], 1U << step, __ATOMIC_RELAXED);
++}
+ }
+ 
+ #define ARMCPU_SMP_SLOTS 8
+@@ -377,7 +385,7 @@
+   secondary = logicalId != static_cast<uint32_t> (ml_get_boot_cpu_number ());
+   if (secondary) {
+     if (!IOCPU::start (provider)) { return false; }
+-    armcpu_smp_step[logicalId] = 1;
++    smpStep (logicalId, 1);
+     affinity = physical;
+     armcpu_smp_mpidr[logicalId] = physical;
+     cpuName = OSSymbol::withCStringNoCopy ("ARM architectural secondary CPU");
+@@ -467,10 +475,11 @@
+   info.cluster_id = static_cast<uint32_t> (ml_get_cluster_number (static_cast<uint32_t> (affinity)));
+   info.cluster_type = ml_get_boot_cluster_type ();
+   perfmon_interrupt_handler_func pmi = nullptr;
++  armcpu_smp_psci_rc[logicalId] = -2000;   // CPU_ON not issued; startCPU replaces it with the call's result
+   kern_return_t status = ml_processor_register (&info, &machProcessor, &ipi_handler, &pmi);
+   if (status != KERN_SUCCESS) { armcpu_smp_fail[logicalId] = 4; return false; }
+   setCPUNumber (info.log_id);
+-  armcpu_smp_step[logicalId] = 2;
++  smpStep (logicalId, 2);
+   setCPUState (kIOCPUStateUninitalized);
+   registerService ();
+   startSecondary ();
+@@ -510,7 +519,7 @@
+ void ArmCpu::startThread (void *argument, wait_result_t)
+ {
+   ArmCpu *self = static_cast<ArmCpu *> (argument);
+-  armcpu_smp_step[self->logicalId] = 3;
++  smpStep (self->logicalId, 3);
+   // Blocks until the new core reaches the scheduler; a core that never arrives only stalls this helper thread.
+   processor_start (self->machProcessor);
+   thread_terminate (current_thread ());
+@@ -530,14 +539,14 @@
+ {
+   if (secondary) {
+     if (!boot) { panic ("ArmCpu: secondary resume is unsupported"); }
+-    armcpu_smp_step[logicalId] = 5;
++    smpStep (logicalId, 5);
+     uint64_t mpidr;
+     __asm__ volatile ("mrs %0, mpidr_el1" : "=r" (mpidr));
+     armcpu_smp_seen_mpidr[logicalId] = static_cast<uint32_t> (mpidr);
+     // A failure is recorded and the core parked (rather than a panic that hides the other cores' state).
+     if ((mpidr & 0xffff) != (affinity & 0xffff)) { armcpu_smp_fail[logicalId] = 1; for (;;) { __asm__ volatile ("wfe"); } }
+     if (!gRemoteGic && !wakeRedistributor (true)) { armcpu_smp_fail[logicalId] = 2; for (;;) { __asm__ volatile ("wfe"); } }
+-    armcpu_smp_step[logicalId] = 6;
++    smpStep (logicalId, 6);
+     enableGic ();
+     if (gSpiIpi) { spiIpiConfigure (gDist, logicalId, affinity); }
+     // The shared IOCPUInterruptController blocks registrations until every core is enabled, so the secondary cores
+@@ -545,7 +554,7 @@
+     ml_install_interrupt_handler (this, static_cast<int> (logicalId), this, reinterpret_cast<IOInterruptHandler> (&ArmCpu::dispatch), nullptr);
+     enableCPUTimeBase (true);
+     setCPUState (kIOCPUStateRunning);
+-    armcpu_smp_step[logicalId] = 7;
++    smpStep (logicalId, 7);
+     armcpu_smp_running = armcpu_smp_running + 1;
+     // XNU clears SIGPdisabled for a core the first time that core takes an IPI, and cpu_signal() silently skips a core until then; Apple's
+     // CPU driver provokes it with a self-IPI from initCPU (osfmk/kern/machine.c, processor_up).
+@@ -785,7 +794,7 @@
+   cleanToMemory (LowResetVectorBase, 0x10000);   // reset vector, start_cpu and the code up to the MMU enable
+   cleanToMemory (ResetHandlerData, 0x1000);
+   cleanToMemory (const_boot_args, 0x1000);
+-  armcpu_smp_step[logicalId] = 4;
++  smpStep (logicalId, 4);
+   int64_t result = psciCall (hvc, 0xc4000003ULL, affinity & 0xff00ffffffULL, entry, 0);
+   armcpu_smp_psci_rc[logicalId] = static_cast<int32_t> (result);
+   return result == 0 ? KERN_SUCCESS : KERN_FAILURE;

@@ -1,0 +1,211 @@
+diff --git a/osfmk/arm/arm_init.c b/osfmk/arm/arm_init.c
+index 6690846..8719e1b 100644
+--- a/osfmk/arm/arm_init.c
++++ b/osfmk/arm/arm_init.c
+@@ -690,6 +690,26 @@ arm_init(
+ 	machine_startup(args);
+ }
+ 
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++/*
++ * A secondary core's progress through its reset path: one 16-byte slot per core, indexed by MPIDR Affinity1, holding
++ * MPIDR << 8 | step and the TTBR1 value the core loaded from cpu_ttep. osfmk/arm64/start.s writes steps 1-8 (some with
++ * the MMU off), arm_init_cpu steps 16-19. The array fills its own two cache lines, which the CPU driver cleans to
++ * memory before it starts a core.
++ */
++extern volatile uint64_t native_smp_reset_trace[16];
++__attribute__((aligned(128))) volatile uint64_t native_smp_reset_trace[16];
++
++static void
++native_smp_trace(uint64_t step)
++{
++	uint64_t mpidr = __builtin_arm_rsr64("MPIDR_EL1");
++
++	native_smp_reset_trace[((mpidr >> 8) & 7) * 2] = (mpidr << 8) | step;
++	__builtin_arm_dsb(0xf);
++}
++#endif
++
+ /*
+  * Routine:        arm_init_cpu
+  * Function:
+@@ -704,6 +724,9 @@ arm_init_cpu(
+ #if __ARM_PAN_AVAILABLE__
+ 	__builtin_arm_wsr("pan", 1);
+ #endif
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++	native_smp_trace(16);
++#endif
+ 
+ #ifdef __arm64__
+ 	configure_timer_apple_regs();
+@@ -757,6 +780,9 @@ arm_init_cpu(
+ 	cpu_machine_idle_init(FALSE);
+ 
+ 	cpu_init();
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++	native_smp_trace(17);
++#endif
+ 
+ #ifdef  APPLETYPHOON
+ 	if ((cpus_defeatures & (0xF << 4 * cpu_data_ptr->cpu_number)) != 0) {
+@@ -786,6 +812,9 @@ arm_init_cpu(
+ 		commpage_update_timebase();
+ 	}
+ 	PE_init_cpu();
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++	native_smp_trace(18);
++#endif
+ #if __arm64__
+ 	apt_msg_init_cpu();
+ #endif
+@@ -834,6 +863,9 @@ arm_init_cpu(
+ 	}
+ #endif
+ 
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++	native_smp_trace(19);
++#endif
+ 	secondary_cpu_main(NULL);
+ }
+ 
+diff --git a/osfmk/arm64/cpu.c b/osfmk/arm64/cpu.c
+index 53f9ce5..1947c03 100644
+--- a/osfmk/arm64/cpu.c
++++ b/osfmk/arm64/cpu.c
+@@ -115,6 +115,12 @@ extern void arm64_retention_wfi(void);
+ //  1 : normal
+ //  2 : overhead simulation (delay & flags)
+ TUNABLE(unsigned int, wfi, "wfi", 1);
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++/* The reset-path trace (osfmk/arm/arm_init.c); native-smp-ttep-flush=1 also writes cpu_ttep back before a core starts. */
++extern volatile uint64_t native_smp_reset_trace[16];
++extern pmap_paddr_t cpu_ttep;
++TUNABLE(bool, native_smp_ttep_flush, "native-smp-ttep-flush", false);
++#endif
+ #if DEVELOPMENT || DEBUG
+ 
+ // wfi_flags
+@@ -934,6 +940,14 @@ cpu_start(int cpu)
+ 
+ 		flush_dcache((vm_offset_t)&CpuDataEntries[cpu], sizeof(cpu_data_entry_t), FALSE);
+ 		flush_dcache((vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t), FALSE);
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++		/* The new core writes its trace with the MMU off: no dirty copy of those lines may stay in this core's cache. */
++		flush_dcache((vm_offset_t)native_smp_reset_trace, sizeof(native_smp_reset_trace), FALSE);
++		/* common_start loads cpu_ttep with the MMU off as well (the warm-reset TTBR1). */
++		if (native_smp_ttep_flush) {
++			flush_dcache((vm_offset_t)&cpu_ttep, sizeof(cpu_ttep), FALSE);
++		}
++#endif
+ #if CONFIG_SPTM
+ 		/**
+ 		 * On SPTM devices, CTRR is configured entirely by the SPTM. Due to this, this logic
+diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
+index dafb665..819f90f 100644
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -100,6 +100,34 @@
+  *	x20 - Boot args pointer
+  *	x21 - CPU data pointer
+  */
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++/*
++ * A secondary core's progress through its reset path (native_smp_reset_trace, osfmk/arm/arm_init.c): one 16-byte
++ * slot per core, indexed by MPIDR Affinity1 (SM8550 and SM8350 number their cores there), holding MPIDR << 8 | step
++ * and then the TTBR1 value the core loaded from cpu_ttep. Before the MMU is on the stores reach memory directly.
++ * Uses x9-x11 only.
++ */
++.macro NATIVE_SMP_TRACE_SLOT
++	adrp	x9, EXT(native_smp_reset_trace)@page
++	add		x9, x9, EXT(native_smp_reset_trace)@pageoff
++	mrs		x10, MPIDR_EL1
++	ubfx	x11, x10, #8, #3
++	add		x9, x9, x11, lsl #4
++.endmacro
++.macro NATIVE_SMP_TRACE step
++	NATIVE_SMP_TRACE_SLOT
++	lsl		x10, x10, #8
++	add		x10, x10, #\step
++	str		x10, [x9]
++	dsb		sy
++.endmacro
++.macro NATIVE_SMP_TRACE_VALUE reg
++	NATIVE_SMP_TRACE_SLOT
++	str		\reg, [x9, #8]
++	dsb		sy
++.endmacro
++#endif
++
+ 	.text
+ 	.align 12
+ 	.globl EXT(LowResetVectorBase)
+@@ -139,7 +167,9 @@ LEXT(reset_vector)
+ 	msr     VBAR_EL1, x0
+ #endif
+ 
+-
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++	NATIVE_SMP_TRACE 1
++#endif
+ 
+ 	// Process reset handlers
+ 	adrp	x19, EXT(ResetHandlerData)@page			// Get address of the reset handler data
+@@ -164,6 +194,9 @@ Lnext_cpu_data_entry:
+ 	b.eq	Lskip_cpu_reset_handler				// Not found
+ 	b		Lcheck_cpu_data_entry	// loop
+ Lfound_cpu_data_entry:
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++	NATIVE_SMP_TRACE 2
++#endif
+ 
+ #ifdef APPLEEVEREST
+ 	/*
+@@ -202,8 +235,14 @@ Lfound_cpu_data_entry:
+ 	msr		TPIDR_EL1, x13
+ #endif /* __ARM_KERNEL_PROTECT__ */
+ 
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++	NATIVE_SMP_TRACE 3
++#endif
+ 	blr		x0
+ Lskip_cpu_reset_handler:
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++	NATIVE_SMP_TRACE 8
++#endif
+ 	b		.									// Hang if the handler is NULL or returns
+ 
+ 	.align 3
+@@ -317,6 +356,9 @@ start_cpu:
+ 
+ 	// x20 set to BootArgs phys address
+ 	// x21 set to cpu data phys address
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++	NATIVE_SMP_TRACE 4
++#endif
+ 
+ 	// Get the kernel memory parameters from the boot args
+ 	ldr		x22, [x20, BA_VIRT_BASE]			// Get the kernel virt base
+@@ -748,6 +790,10 @@ common_start:
+ 	adrp	x0, EXT(cpu_ttep)@page
+ 	add		x0, x0, EXT(cpu_ttep)@pageoff
+ 	ldr		x0, [x0]
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++	NATIVE_SMP_TRACE_VALUE x0
++	NATIVE_SMP_TRACE 5
++#endif
+ 	MSR_TTBR1_EL1_X0
+ 1:
+ 
+@@ -776,6 +822,11 @@ common_start:
+ 	MOV64   x0, SCTLR_EL1_DEFAULT
+ 	MSR_SCTLR_EL1_X0
+ 	isb		sy
++#if defined(XNU_NATIVE_SMP_TRACE) && XNU_NATIVE_SMP_TRACE
++	cbz		x21, 2f
++	NATIVE_SMP_TRACE 6
++2:
++#endif
+ 
+ #if !VMAPPLE
+ 	MOV64	x1, SCTLR_EL1_DEFAULT

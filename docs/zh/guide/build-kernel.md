@@ -72,6 +72,7 @@ DEPLOYMENT_TARGET_FLAGS="-miphoneos-version-min=17.0 -DXNU_TARGET_OS_IOS"
 | `XNU_NATIVE_CS_HASH_CACHE` | 从已验证 16 KiB 块派生 4 KiB 签名哈希 | 无 |
 | `XNU_NATIVE_ARCH_TIMER` | 使用架构定时器入口 | 无 |
 | `XNU_NATIVE_PAN` | 启用 ARMv8.1 PAN | 无 |
+| `XNU_NATIVE_SMP_TRACE` | 记录每个次级核心的复位路径步骤 | 无 |
 | `XNU_DT_PANIC_REGION` | 从设备树读取 panic 区域 | 无 |
 | `XNU_TRUST_CACHE_RUNTIME` | 初始化 trust cache 运行时 | 无 |
 | `XNU_BOOT_PROGRESS` | 加入启动进度层 | `build/boot-progress/libBootProgress.a` |
