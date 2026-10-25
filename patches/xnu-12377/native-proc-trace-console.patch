@@ -82,11 +82,11 @@
 +		}
 +	}
 +	/*
-+	 * A watchdog kill (FrontBoard's 0x8badf00d: a main thread that held a scene update past its allowance) is a
++	 * A watchdog kill (FrontBoard's 0x8badf00d in namespace OS_REASON_SPRINGBOARD: a main thread that held a scene update past its allowance) is a
 +	 * SIGKILL the killed process takes itself: its threads still stand where they waited, so they are printed too.
 +	 */
 +	if (p == current_proc() && (rv & 0x7f) == SIGKILL && exit_reason != OS_REASON_NULL &&
-+	    exit_reason->osr_namespace == OS_REASON_FRONTBOARD) {
++	    exit_reason->osr_namespace == OS_REASON_SPRINGBOARD) {
 +		proc_trace_watchdog_frames();
 +	}
 +#endif
