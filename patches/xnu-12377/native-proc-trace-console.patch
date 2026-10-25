@@ -326,7 +326,7 @@
 +	if (__atomic_exchange_n(&proc_trace_reason_busy, 1, __ATOMIC_ACQUIRE)) {
 +		return;
 +	}
-+	while (scanned < (160ULL << 20) && best < 3) {
++	while (scanned < (160ULL << 20) && best < 4) {
 +		/* The _ut types are wrapped structs or plain integers by configuration; both hold one 64-bit word. */
 +		vm_map_offset_ut address_u;
 +		vm_map_size_ut size_u;
