@@ -270,8 +270,10 @@ rebuild_on_change owner-data-mount-mode "$OWNER_DATA_MOUNT:$NATIVE_RAM_BLOCK:${X
 EXTRA_MAKE_ARGS+=("kern_exec.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE -DXNU_OWNER_DATA_MOUNT=$OWNER_DATA_MOUNT -DXNU_NATIVE_RAM_BLOCK=$NATIVE_RAM_BLOCK -include $OWNER_DATA_HEADER")
 EXTRA_MAKE_ARGS+=("kern_exit.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE")
 EXTRA_MAKE_ARGS+=("exception.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE")
+EXTRA_MAKE_ARGS+=("sys_work_interval.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE")
+EXTRA_MAKE_ARGS+=("work_interval.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE")
 rebuild_on_change proc-trace-console-mode "$PROC_TRACE_CONSOLE" bsd/DEVELOPMENT/kern_exec.o bsd/DEVELOPMENT/kern_exit.o \
-  osfmk/DEVELOPMENT/exception.o
+  osfmk/DEVELOPMENT/exception.o bsd/DEVELOPMENT/sys_work_interval.o osfmk/DEVELOPMENT/work_interval.o
 # vfs.generic.apfs.edt_fstab from the device tree's /filesystems/fstab: getfsent() reads only this on an APFS root,
 # and the KDK APFS kext does not provide it.
 EDT_FSTAB=$(flag XNU_EDT_FSTAB)

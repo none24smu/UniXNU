@@ -1,0 +1,92 @@
+diff --git a/bsd/kern/sys_work_interval.c b/bsd/kern/sys_work_interval.c
+index b544bf3..7f3165a 100644
+--- a/bsd/kern/sys_work_interval.c
++++ b/bsd/kern/sys_work_interval.c
+@@ -37,6 +37,22 @@
+ #include <kern/work_interval.h>
+ 
+ #include <libkern/libkern.h>
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE
++#include <sys/proc.h>
++#endif
++
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE
++/* A refused work interval create (UIKit throws "Failed to create work interval" on any of them). */
++static void
++work_interval_trace_console(uint32_t flags, const char *stage, int result)
++{
++	char name[MAXCOMLEN + 1];
++
++	proc_selfname(name, sizeof(name));
++	printf("proc-trace: work interval create pid %d %s flags 0x%x refused (%s %d)\n",
++	    proc_selfpid(), name, flags, stage, result);
++}
++#endif
+ 
+ int
+ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
+@@ -69,6 +85,9 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
+ 		}
+ 
+ 		if ((error = priv_check_cred(kauth_cred_get(), PRIV_WORK_INTERVAL, 0)) != 0) {
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE
++			work_interval_trace_console(create_params.wicp_create_flags, "privilege", error);
++#endif
+ 			return error;
+ 		}
+ 
+@@ -79,6 +98,11 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
+ 		};
+ 
+ 		kret = kern_work_interval_create(current_thread(), &create_args);
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE
++		if (kret != KERN_SUCCESS) {
++			work_interval_trace_console(create_params.wicp_create_flags, "kern", kret);
++		}
++#endif
+ 
+ 		/* thread already has a work interval */
+ 		if (kret == KERN_FAILURE) {
+diff --git a/osfmk/kern/work_interval.c b/osfmk/kern/work_interval.c
+index 3829f5f..9b008b0 100644
+--- a/osfmk/kern/work_interval.c
++++ b/osfmk/kern/work_interval.c
+@@ -1107,6 +1107,10 @@ kern_work_interval_create(thread_t thread,
+ 		 *
+ 		 * (Creating a joinable WI is allowed anytime.)
+ 		 */
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE
++		printf("proc-trace: work interval create: thread %llu already in work interval %llu\n",
++		    thread_tid(thread), thread->th_work_interval->wi_id);
++#endif
+ 		return KERN_FAILURE;
+ 	}
+ 
+@@ -1122,6 +1126,9 @@ kern_work_interval_create(thread_t thread,
+ 		 * per each application task
+ 		 */
+ 		if (create_flags & WORK_INTERVAL_FLAG_GROUP) {
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE
++			printf("proc-trace: work interval create: CA client with a group flag\n");
++#endif
+ 			return KERN_FAILURE;
+ 		}
+ 		if (!task_is_app(creating_task)) {
+@@ -1137,10 +1144,17 @@ kern_work_interval_create(thread_t thread,
+ 			 * On iOS, it's a hard failure to get your apptype
+ 			 * wrong and then try to render something.
+ 			 */
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE
++			printf("proc-trace: work interval create: CA client task is not an app (apptype %d)\n",
++			    creating_task->requested_policy.trp_apptype);
++#endif
+ 			return KERN_NOT_SUPPORTED;
+ #endif /* XNU_TARGET_OS_OSX */
+ 		}
+ 		if (task_set_ca_client_wi(creating_task, true) == false) {
++#if defined(XNU_PROC_TRACE_CONSOLE) && XNU_PROC_TRACE_CONSOLE
++			printf("proc-trace: work interval create: task already has its CA client work interval\n");
++#endif
+ 			return KERN_FAILURE;
+ 		}
+ 	}
