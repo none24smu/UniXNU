@@ -5,7 +5,9 @@ import argparse,re,subprocess,shutil
 p=argparse.ArgumentParser();p.add_argument('--adreno',type=Path);p.add_argument('--output',type=Path,required=True);a=p.parse_args();root=Path(__file__).resolve().parents[1];out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
 patch=(root/'patches/mesa/turnip-darwin-kmd.patch').read_text();marker='diff --git a/src/freedreno/vulkan/tu_knl_darwin.cc';block=patch[patch.index(marker):];block=block[:block.index('\ndiff --git ',1)];original=''.join(x[1:]+'\n' for x in block.splitlines() if x.startswith('+') and not x.startswith('+++'))
 source=out/'source';path=source/'src/freedreno/vulkan/tu_knl_darwin.cc';path.parent.mkdir(parents=True,exist_ok=True);path.write_text(original)
+subprocess.run(['git','init','-q',str(source)],check=True)
 subprocess.run(['git','apply',str(root/'patches/mesa/turnip-submit-backpressure.patch')],cwd=source,check=True)
+assert 'for (;;)' in path.read_text() and 'attempt < 64' not in path.read_text(), 'Patch was not applied to the isolated test source'
 def function(text):
  start=text.index('static VkResult\ndarwin_submit_chunk(');return text[start:text.index('\n}\n',start)+3]
 prefix=r'''
