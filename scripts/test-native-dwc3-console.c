@@ -88,8 +88,13 @@ int main(void)
     memcpy(dma.receive,"\0ZETA:REBOOT-",13); complete(2,512-13);
     memcpy(dma.receive,"BOOTLOADER\n",11); complete(2,512-11);
     assert(reset_deadline && !resets);
+    // The shell sees every received byte, in order, across completions.
+    uint8_t got[64]; unsigned n=unixnu_dwc3_read(got,sizeof(got));
+    assert(n==24 && got[0]==0 && !memcmp(got+1,"ZETA:REBOOT-BOOTLOADER\n",23) && unixnu_dwc3_read(got,sizeof(got))==0);
+    memcpy(dma.receive,"1 ps\n",5); complete(2,512-5); n=unixnu_dwc3_read(got,2); assert(n==2 && got[0]=='1');
+    n=unixnu_dwc3_read(got,sizeof(got)); assert(n==3 && !memcmp(got,"ps\n",3));
     while (transfer_active[3]) complete(3,0);
     assert(resets==1);
     command_timeout=true; uint64_t start=test_time;assert(!command(1,1,0,0,0));assert(test_time-start<100);
-    puts("PASS: CDC descriptors, EP0 data/status phases, line coding, refusal, DMA completion accounting, split reboot frame and bounded command timeout; hardware I/O substituted");
+    puts("PASS: CDC descriptors, EP0 data/status phases, line coding, refusal, DMA completion accounting, split reboot frame, the shell's received bytes and bounded command timeout; hardware I/O substituted");
 }

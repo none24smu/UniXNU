@@ -14,6 +14,7 @@ extern vm_offset_t ml_static_vtop(vm_offset_t);
 
 #define EVENT_BYTES 4096u
 #define RING_BYTES 32768u
+#define RECEIVE_BYTES 8192u
 #define EP_COUNT 6u
 #define GCTL 0xc110u
 #define GSNPSID 0xc120u
@@ -239,6 +240,11 @@ static void send_pending(void)
 // Host commands on the log's OUT endpoint, each "\0ZETA:<name>\n": return to the bootloader, or count one Home press for the board's
 // HID input (zeta kits/zeta/HidInputProbe.cpp reads unixnu_dwc3_home_requests).
 volatile uint32_t unixnu_dwc3_home_requests;
+// Every received byte is also kept for the board's command shell (zeta kits/zeta/ZetaShell.c), which drains it with
+// unixnu_dwc3_read. receive_ready stays 0, so XNU's serial keyboard thread never takes these bytes for /dev/console.
+static uint8_t received[RECEIVE_BYTES];
+static uint64_t received_head, received_tail;
+volatile uint64_t unixnu_dwc3_received_dropped;
 static void receive_command(unsigned length)
 {
     static const char *const commands[] = {"\0ZETA:REBOOT-BOOTLOADER\n", "\0ZETA:HOME\n"};
@@ -246,6 +252,10 @@ static void receive_command(unsigned length)
     cache_sync(dma.receive, sizeof(dma.receive));
     for (unsigned i = 0; i < length; i++) {
         uint8_t c = dma.receive[i];
+        if (received_head - __atomic_load_n(&received_tail, __ATOMIC_ACQUIRE) < RECEIVE_BYTES) {
+            received[received_head % RECEIVE_BYTES] = c;
+            __atomic_store_n(&received_head, received_head + 1, __ATOMIC_RELEASE);
+        } else unixnu_dwc3_received_dropped++;
         for (unsigned k = 0; k < 2; k++) {
             if (c != (uint8_t)commands[k][command_positions[k]]) { command_positions[k] = c == 0 ? 1 : 0; continue; }
             if (++command_positions[k] != lengths[k]) continue;
@@ -326,6 +336,18 @@ unsigned int unixnu_dwc3_ready(void) { unixnu_dwc3_poll(); return 1; }
 void unixnu_dwc3_put(uint8_t byte) { append(byte); unixnu_dwc3_poll(); }
 unsigned int unixnu_dwc3_receive_ready(void) { unixnu_dwc3_poll(); return 0; }
 uint8_t unixnu_dwc3_receive(void) { return 0; }
+// One consumer: the received bytes in order, at most capacity of them.
+unsigned int unixnu_dwc3_read(uint8_t *buffer, unsigned int capacity)
+{
+    unixnu_dwc3_poll();
+    uint64_t head = __atomic_load_n(&received_head, __ATOMIC_ACQUIRE), tail = received_tail;
+    unsigned int count = 0;
+    while (tail != head && count < capacity) buffer[count++] = received[tail++ % RECEIVE_BYTES];
+    __atomic_store_n(&received_tail, tail, __ATOMIC_RELEASE);
+    return count;
+}
+// Output bytes not yet sent to the host, so a long reply can wait instead of overwriting the oldest log text.
+unsigned int unixnu_dwc3_backlog(void) { return (unsigned int)(ring_head - ring_tail); }
 
 bool unixnu_dwc3_init(void)
 {
