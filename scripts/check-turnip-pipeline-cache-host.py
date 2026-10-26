@@ -9,6 +9,7 @@ application cache hit. This does not qualify cross-build cache portability.
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import struct
@@ -26,7 +27,7 @@ for required in [LIBRARY, SHIM, SHADERS]:
         raise SystemExit('Build the host Turnip/peer/own shader fixtures first: ' + str(required))
 
 
-def binary_identity(path):
+def binary_identity(path, *, host=False):
     data = path.read_bytes()
     if struct.unpack_from('<I', data)[0] != 0xfeedfacf:
         raise SystemExit('Expected a thin little-endian Mach-O64: ' + str(path))
@@ -35,8 +36,10 @@ def binary_identity(path):
     if end > len(data):
         raise SystemExit('Truncated Mach-O load commands')
     cpu, subtype = struct.unpack_from('<II', data, 4)
-    if cpu != 0x100000c or subtype != 0:
-        raise SystemExit('Expected ordinary ARM64 subtype 0: ' + str(path))
+    expected = (0x1000007, 3) if host and platform.machine() == 'x86_64' else (0x100000c, 0)
+    if (cpu, subtype) != expected:
+        raise SystemExit('Unexpected Mach-O architecture for %s: %#x/%#x, expected %#x/%#x' %
+                         (path, cpu, subtype, *expected))
     result = dict(sha256=hashlib.sha256(data).hexdigest(), cpu_type=cpu, cpu_subtype=subtype)
     for _ in range(count):
         command, length = struct.unpack_from('<II', data, offset)
@@ -54,13 +57,14 @@ def binary_identity(path):
 
 executable = OUT / 'pipeline_cache'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', '-O1', '-Wall', '-Wextra', '-Werror',
-                '-Wno-unused-parameter', '-Wno-unused-const-variable', '-I', '/opt/homebrew/include',
+                '-Wno-unused-parameter', '-Wno-unused-const-variable', '-I',
+                str(Path(subprocess.check_output(['brew', '--prefix'], text=True).strip()) / 'include'),
                 '-I', SHADERS.parent, ROOT / 'drivers/NativeAdreno/tests/hostsim/pipeline_cache.cpp',
                 '-o', executable], check=True)
 env = {k: v for k, v in os.environ.items() if not k.startswith(('IR3_', 'FD_MESA_', 'NIR_', 'TU_', 'HOSTSIM_', 'MESA_'))}
 env.update(DYLD_INSERT_LIBRARIES=str(SHIM), MESA_SHADER_CACHE_DISABLE='true', MESA_LOG='')
 report = dict(evidence='host Turnip compilation/cache import over software kernel transport; no shader execution',
-              host=binary_identity(LIBRARY),
+              host=binary_identity(LIBRARY, host=True),
               own_shader_header_sha256=hashlib.sha256(SHADERS.read_bytes()).hexdigest(),
               cross_platform_portability_qualified=False, cases={})
 if IOS.is_file():

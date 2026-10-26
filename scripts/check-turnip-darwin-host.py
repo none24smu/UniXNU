@@ -5,11 +5,17 @@ The kernel half is the real GPU context bring-up, VM, ring, submit and user-clie
 (tests/hostsim/host_gpu_service.cpp); an IOKit shim answers the backend's IOKit calls. Nothing here runs a shader or touches
 hardware: the software CP retires every submission at once. Needs the host Turnip build (build-turnip-darwin.py --target host)."""
 import os
+import argparse
 import platform
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--skip-unavailable-ui-recipes', action='store_true',
+                    help='Skip only missing device-specific Apple UI recipe helpers; all available checks remain required')
+args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
 kit = ROOT / 'drivers/NativeAdreno'
@@ -98,13 +104,14 @@ for mode in ['normal', 'busy', 'fence-error', 'free-error', 'lease-error', 'view
 subprocess.run([sys.executable, ROOT / 'scripts/check-turnip-pipeline-cache-host.py'], check=True)
 # Original UI recipes additionally cover graphics-library caches, strict driver
 # feedback and genuine UUID/empty-cache refusals. The software peer runs no shader.
-with tempfile.TemporaryDirectory(prefix='quartzcore-driver-cache-', dir=out) as temporary:
-    subprocess.run([sys.executable, ROOT / 'scripts/check-quartzcore-turnip-cache-host.py',
-                    '--output', Path(temporary) / 'control'], check=True, timeout=660)
-
-with tempfile.TemporaryDirectory(prefix='priming-driver-cache-', dir=out) as temporary:
-    subprocess.run([sys.executable, ROOT / 'scripts/check-priming-cache-host.py',
-                    '--output', Path(temporary) / 'control'], check=True, timeout=360)
+for helper, prefix, timeout in [('check-quartzcore-turnip-cache-host.py', 'quartzcore-driver-cache-', 660),
+                                ('check-priming-cache-host.py', 'priming-driver-cache-', 360)]:
+    path = ROOT / 'scripts' / helper
+    if not path.is_file() and args.skip_unavailable_ui_recipes:
+        print('SKIP: unavailable device-specific UI recipe helper: ' + helper)
+        continue
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=out) as temporary:
+        subprocess.run([sys.executable, path, '--output', Path(temporary) / 'control'], check=True, timeout=timeout)
 
 env_plugin = dict(env)
 plugin = subprocess.run([str(plugin_smoke), str(library)], env=env_plugin, capture_output=True, text=True, timeout=300)
