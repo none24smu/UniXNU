@@ -21,7 +21,7 @@ if args.component == 'ArmCpu':
     patched = out / 'ArmCpu.cpp'
     patched.write_bytes(source.read_bytes())
     for patch_name in ('ArmCpu-arm64-assembly.patch', 'ArmCpu-12377-boot-interrupt.patch', 'ArmCpu-12377-smp-steps.patch',
-                       'ArmCpu-12377-smp-delay.patch'):
+                       'ArmCpu-12377-smp-delay.patch', 'ArmCpu-12377-smp-start.patch'):
         driver_patch = ROOT / 'patches/drivers' / patch_name
         subprocess.run(['git', 'apply', '--directory', str(out.relative_to(ROOT)), driver_patch], cwd=ROOT, check=True)
     source = patched

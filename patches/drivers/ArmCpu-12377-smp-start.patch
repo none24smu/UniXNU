@@ -1,0 +1,33 @@
+--- a/ArmCpu.cpp
++++ b/ArmCpu.cpp
+@@ -76,6 +76,7 @@
+   static void drainPending (void);
+ public:
+   static void drainPendingNow (void);
++  static int startPending (unsigned id);
+ private:
+   bool prepareGic (void);
+   void startSecondary (void);
+@@ -493,6 +494,22 @@
+   }
+ }
+ 
++// One queued core, for a board shell that starts the cores one at a time (sheng-smp-delay holds them): 0 started, 1 no such
++// slot, 2 not queued (already started or absent), 3 its registration failed.
++int ArmCpu::startPending (unsigned id)
++{
++  if (id == 0 || id >= ARMCPU_SMP_SLOTS) { return 1; }
++  ArmCpu *cpu = __atomic_exchange_n (&gPending[id], static_cast<ArmCpu *> (nullptr), __ATOMIC_ACQ_REL);
++  if (cpu == nullptr) { return 2; }
++  IOLog ("ArmCpu: starting core %u alone\n", id);
++  return cpu->finishSecondary () ? 0 : 3;
++}
++
++extern "C" int armcpu_start_pending (unsigned id)
++{
++  return ArmCpu::startPending (id);
++}
++
+ bool ArmCpu::finishSecondary (void)
+ {
+   dist = gDist;
