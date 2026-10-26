@@ -17,6 +17,7 @@ out = ROOT / 'build/turnip-darwin-host'
 out.mkdir(parents=True, exist_ok=True)
 smmu = ROOT / 'kits/ArmSmmu4K'
 library = ROOT / 'build/mesa-tu/src/freedreno/vulkan/libvulkan_freedreno.dylib'
+brew_include = Path(subprocess.check_output(['brew', '--prefix'], text=True).strip()) / 'include'
 if not library.exists():
     sys.exit('Build the host Turnip first: python3 scripts/build-turnip-darwin.py --target host')
 
@@ -51,7 +52,7 @@ shim = out / 'libhostiokit.dylib'
 subprocess.run(['xcrun', 'clang++', '-dynamiclib', '-o', shim, service, shim_obj, *core, *objects,
                 '-framework', 'IOKit', '-framework', 'CoreFoundation'], check=True)
 smoke = out / 'vulkan_smoke'
-subprocess.run(['xcrun', 'clang', '-std=c11', '-O1', '-I', '/opt/homebrew/include', sim / 'vulkan_smoke.c', '-o', smoke,
+subprocess.run(['xcrun', 'clang', '-std=c11', '-O1', '-I', brew_include, sim / 'vulkan_smoke.c', '-o', smoke,
                 '-Wl,-rpath,' + str(out)], check=True)
 
 plugin_smoke = out / 'plugin_smoke'
@@ -73,7 +74,7 @@ if result.returncode or 'PASS' not in result.stdout:
 # and preserve ownership on failures. This exercises real transport code, not pixels.
 deferred = out / 'deferred_bo'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', '-O1', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
-                '-I', '/opt/homebrew/include', '-I', kit, sim / 'deferred_bo.cpp', '-o', deferred], check=True)
+                '-I', brew_include, '-I', kit, sim / 'deferred_bo.cpp', '-o', deferred], check=True)
 deferred_env = dict(env, TU_DARWIN_RETIRE_TRACE='1')
 deferred_env.pop('HOSTSIM_FAIL_USER_UNMAP', None)
 for mode in ['normal', 'busy', 'fence-error', 'free-error', 'lease-error', 'view-error', 'map-cleanup-error', 'pressure']:

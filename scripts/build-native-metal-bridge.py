@@ -7,6 +7,7 @@ is committed. Output: build/native-metal-bridge/<target>/libnative_metal_bridge.
 import argparse
 import json
 import os
+import platform
 import re
 from pathlib import Path
 import shutil
@@ -68,7 +69,9 @@ manifest.write_text('\n'.join([
     'sha2 = { version = "0.10", features = ["asm"] }',
     '[profile.release]', 'panic = "unwind"', 'debug = 1', '',
 ]))
-triple = 'aarch64-apple-ios' if args.target == 'ios' else 'aarch64-apple-darwin'
+triple = 'aarch64-apple-ios' if args.target == 'ios' else {
+    'arm64': 'aarch64-apple-darwin', 'x86_64': 'x86_64-apple-darwin',
+}[platform.machine()]
 env = dict(os.environ, NMB_FIXTURE_AIR=str(air), NMB_FC_AIR=str(fc_air), IPHONEOS_DEPLOYMENT_TARGET='17.0', MACOSX_DEPLOYMENT_TARGET='14.0')
 target_dir = ROOT / 'build/m2v-target'
 log = out / ('build-%s.log' % args.target)
