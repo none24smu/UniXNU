@@ -14,8 +14,12 @@ def apply_series(source, patches):
     patches = [Path(p).resolve() for p in patches]
 
     def git(*args, env=None):
-        return subprocess.check_output(
-            ['git', '-C', str(source), *args], env=env, stderr=subprocess.PIPE)
+        try:
+            return subprocess.check_output(
+                ['git', '-C', str(source), *args], env=env, stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as error:
+            raise ValueError('Recorded source check failed: ' + ' '.join(args) + '\n' +
+                             error.stderr.decode(errors='replace')) from error
 
     with tempfile.TemporaryDirectory(prefix='recorded-patches-') as temporary:
         env = dict(os.environ, GIT_INDEX_FILE=str(Path(temporary) / 'index'))
