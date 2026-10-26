@@ -1,0 +1,66 @@
+--- a/ArmCpu.cpp
++++ b/ArmCpu.cpp
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: BSD-2-Clause-Patent
+ #include <IOKit/IOCPU.h>
++#include <IOKit/IOLib.h>
+ #include <IOKit/IODeviceTreeSupport.h>
+ #include <IOKit/IOMemoryDescriptor.h>
+ #include <libkern/c++/OSData.h>
+@@ -73,6 +74,9 @@ class ArmCpu : public IOCPU {
+   bool wakeRedistributor (bool local);
+   bool finishSecondary (void);
+   static void drainPending (void);
++public:
++  static void drainPendingNow (void);
++private:
+   bool prepareGic (void);
+   void startSecondary (void);
+   static void startThread (void *argument, wait_result_t);
+@@ -164,6 +168,10 @@ static bool gSmpWanted = false;
+ // the boot nub, or a late secondary once the boot CPU is registered, finishes them.
+ static class ArmCpu *volatile gPending[ARMCPU_SMP_SLOTS];
+ static volatile uint32_t gBootRegistered = 0;
++// sheng-smp-delay=<seconds>: secondary cores stay queued (powered off) that long after the boot nub registered, so a fault
++// that follows secondary power-on can be told from one timed from kernel start.
++static uint32_t gSmpDelay = 0;
++static volatile uint32_t gSmpDelayStarted = 0;
+ static bool gRemoteGic = false; // sheng-smp-gic=1: the boot CPU prepares a new core's redistributor before CPU_ON
+ 
+ // Shared peripheral interrupts (GICv3 SPIs, INTID 32..1019). A driver attaches a handler for one INTID; the line is set to
+@@ -449,12 +457,35 @@ bool ArmCpu::start (IOService *provider)
+   gController = controller;
+   // processor_boot() already invoked initCPU(true) through cpu_start().
+   registerService ();
++  PE_parse_boot_argn ("sheng-smp-delay", &gSmpDelay, sizeof (gSmpDelay));
+   __atomic_store_n (&gBootRegistered, 1U, __ATOMIC_RELEASE);
+   drainPending ();
+   return true;
+ }
+ 
++static void smpDelayThread (void *, wait_result_t)
++{
++  IOSleep (gSmpDelay * 1000);
++  IOLog ("ArmCpu: starting the secondary cores after sheng-smp-delay=%u s\n", gSmpDelay);
++  __atomic_store_n (&gSmpDelay, 0U, __ATOMIC_RELEASE);
++  ArmCpu::drainPendingNow ();
++  thread_terminate (current_thread ());
++}
++
+ void ArmCpu::drainPending (void)
++{
++  if (__atomic_load_n (&gSmpDelay, __ATOMIC_ACQUIRE) != 0) {
++    thread_t thread;
++    if (__atomic_exchange_n (&gSmpDelayStarted, 1U, __ATOMIC_ACQ_REL) == 0 &&
++        kernel_thread_start (&smpDelayThread, nullptr, &thread) == KERN_SUCCESS) {
++      thread_deallocate (thread);
++    }
++    return;
++  }
++  drainPendingNow ();
++}
++
++void ArmCpu::drainPendingNow (void)
+ {
+   for (unsigned id = 1; id < ARMCPU_SMP_SLOTS; id++) {
+     ArmCpu *cpu = __atomic_exchange_n (&gPending[id], static_cast<ArmCpu *> (nullptr), __ATOMIC_ACQ_REL);
