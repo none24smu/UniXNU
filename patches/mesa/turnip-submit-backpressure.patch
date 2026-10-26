@@ -1,0 +1,40 @@
+diff --git a/src/freedreno/vulkan/tu_knl_darwin.cc b/src/freedreno/vulkan/tu_knl_darwin.cc
+--- a/src/freedreno/vulkan/tu_knl_darwin.cc
++++ b/src/freedreno/vulkan/tu_knl_darwin.cc
+@@ -830,7 +830,11 @@
+    for (unsigned i = 0; i < count; i++)
+       req.buffers[i] = entries[i];
+ 
+-   for (unsigned attempt = 0; attempt < 64; attempt++) {
++   /* The eight slots belong to the shared GPU, not just this process. A
++    * completed local fence says nothing about another client's queued work.
++    * Bound actual elapsed time and yield even when our oldest fence is done. */
++   const uint64_t deadline = os_time_get_nano() + 5000000000ull;
++   for (;;) {
+       NativeAdrenoAbiSubmitReply reply = {};
+       kern_return_t kr = dw_call(NativeAdrenoMethodSubmit, &req, sizeof(req), &reply, sizeof(reply));
+       if (kr == KERN_SUCCESS) {
+@@ -839,16 +843,18 @@
+       }
+       if (kr != kIOReturnBusy)
+          return vk_device_set_lost(&dev->vk, "submit failed: 0x%x", kr);
++      if (os_time_get_nano() >= deadline)
++         return vk_device_set_lost(&dev->vk, "submit: GPU queue stayed busy for five seconds");
+ 
+       pthread_mutex_lock(&dw.lock);
+       uint32_t oldest = dw.inflight_count ? dw.inflight[0] : 0;
+       pthread_mutex_unlock(&dw.lock);
+-      if (!oldest)
+-         usleep(100);
+-      else if (dw_wait_fence_locked_free(dev, oldest, os_time_get_nano() + 5000000000ull) != VK_SUCCESS)
++      if (oldest && dw_wait_fence_locked_free(dev, oldest, deadline) != VK_SUCCESS)
+          return vk_device_set_lost(&dev->vk, "submit: GPU did not retire a job");
+-   }
+-   return vk_device_set_lost(&dev->vk, "submit: no free job slot");
++      /* An old local fence may already be complete while another client's jobs
++       * fill every slot. Give that work time to retire before trying again. */
++      usleep(100);
++   }
+ }
+ 
+ static VkResult
