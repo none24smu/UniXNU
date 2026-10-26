@@ -5,6 +5,7 @@ The kernel half is the real GPU context bring-up, VM, ring, submit and user-clie
 (tests/hostsim/host_gpu_service.cpp); an IOKit shim answers the backend's IOKit calls. Nothing here runs a shader or touches
 hardware: the software CP retires every submission at once. Needs the host Turnip build (build-turnip-darwin.py --target host)."""
 import os
+import platform
 from pathlib import Path
 import subprocess
 import sys
@@ -30,7 +31,14 @@ for name in ['IOKit/IOTypes.h', 'IOKit/IOReturn.h', 'IOKit/IOBufferMemoryDescrip
 objects = []
 for stem in ['ArmSmmu4KContext', 'ArmSmmu4KProgram', 'ArmSmmu4KLive', 'ArmSmmu4KStreams', 'ArmSmmu4KMmio']:
     obj = out / (stem + '.o')
-    subprocess.run(['xcrun', 'clang', '-std=c11', '-O1', '-fPIC', '-c', smmu / (stem + '.c'), '-o', obj], check=True)
+    source = smmu / (stem + '.c')
+    if stem == 'ArmSmmu4KMmio' and platform.machine() != 'arm64':
+        # Callback I/O implements the peer. Direct MMIO must stay unavailable.
+        source = out / 'ArmSmmu4KMmio-refusal.c'
+        source.write_text('#include "ArmSmmu4KMmio.h"\n'
+                          'ArmSmmu4KStatus ArmSmmu4KBindMmio(ArmSmmu4KMmio *m,ArmSmmu4KIo *out) {\n'
+                          ' (void)m;if(out)*out=(ArmSmmu4KIo){0};return ArmSmmu4KArgument; }\n')
+    subprocess.run(['xcrun', 'clang', '-std=c11', '-O1', '-fPIC', '-I', smmu, '-c', source, '-o', obj], check=True)
     objects.append(obj)
 obj = out / 'AdrenoPM4.o'
 subprocess.run(['xcrun', 'clang', '-std=c11', '-O1', '-fPIC', '-c', ROOT / 'kits/AdrenoPM4/AdrenoPM4.c', '-o', obj], check=True)
