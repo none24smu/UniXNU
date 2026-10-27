@@ -283,6 +283,13 @@ rebuild_on_change edt-fstab-mode "$EDT_FSTAB" bsd/DEVELOPMENT/vfs_subr.o bsd/DEV
 # The boot progress layer (UniXNU zzz-boot-progress, library from the device package as kits/<kit>): diagnostic page,
 # checkpoints and the user fault probe. The hooks compile in once the library exists, after the first pass.
 BOOT_PROGRESS=$(flag XNU_BOOT_PROGRESS)
+ZETA_USER_CSSC=$(flag XNU_ZETA_USER_CSSC)
+if [ "$ZETA_USER_CSSC" = 1 ] && { [ "$BOOT_PROGRESS" != 1 ] || [ "$OWNER_DATA_MOUNT" != 1 ] || [ ! -f kits/zeta/ZetaUserInstructionKernel.c ]; }; then
+  echo 'XNU_ZETA_USER_CSSC requires the zeta adapter, boot-progress archive and owner-Data compile record' >&2
+  exit 1
+fi
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_ZETA_USER_CSSC=$ZETA_USER_CSSC"
+rebuild_on_change zeta-user-cssc-mode "$ZETA_USER_CSSC" osfmk/DEVELOPMENT/sleh.o
 BOOT_PROGRESS_OBJECTS="osfmk/DEVELOPMENT/arm_init.o osfmk/DEVELOPMENT/startup.o osfmk/DEVELOPMENT/video_console.o
   osfmk/DEVELOPMENT/serial_console.o osfmk/DEVELOPMENT/sleh.o bsd/DEVELOPMENT/bsd_init.o bsd/DEVELOPMENT/kern_exec.o
   bsd/DEVELOPMENT/kern_exit.o pexpert/DEVELOPMENT/pe_kprintf.o"
@@ -358,7 +365,7 @@ if [ "$SOURCE_CRYPTO" = 1 ] || [ "$ARM_DT_PLATFORM" = 1 ] || [ "$ARMCPU" = 1 ] |
   # Bootstrap references are enabled only after the provider archive exists.
   rm -f "$OBJ/osfmk/DEVELOPMENT/prng_random.o" "$OBJ/pexpert/DEVELOPMENT/pe_init.o"
   rm -f "$OBJ/pexpert/DEVELOPMENT/pe_serial.o" "$OBJ/osfmk/DEVELOPMENT/rtclock.o"
-  build_kernel CFLAGS_EXTRA="$EXTRA_CFLAGS -UXNU_SOURCE_CORECRYPTO14 -UXNU_ARM_DT_PLATFORM -UXNU_ARMCPU -UXNU_NATIVE_DWC3_CONSOLE -UXNU_BOOT_PROGRESS -UXNU_NATIVE_LEGACY_DISPLAY" \
+  build_kernel CFLAGS_EXTRA="$EXTRA_CFLAGS -UXNU_SOURCE_CORECRYPTO14 -UXNU_ARM_DT_PLATFORM -UXNU_ARMCPU -UXNU_NATIVE_DWC3_CONSOLE -UXNU_BOOT_PROGRESS -UXNU_NATIVE_LEGACY_DISPLAY -UXNU_ZETA_USER_CSSC" \
     "bsd_init.o_CFLAGS_ADD=-DXNU_NATIVE_UFS_OWNER_ROOT=0" \
     "kern_exec.o_CFLAGS_ADD=-DXNU_PROC_TRACE_CONSOLE=$PROC_TRACE_CONSOLE -DXNU_OWNER_DATA_MOUNT=0 -DXNU_NATIVE_RAM_BLOCK=$NATIVE_RAM_BLOCK -include $OWNER_DATA_HEADER"
   ARCHIVE_FLAGS="-L$FAKEROOT/usr/local/lib/kernel -lfirehose_kernel"
