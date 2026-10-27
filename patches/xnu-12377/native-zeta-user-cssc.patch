@@ -1,0 +1,36 @@
+diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
+--- a/osfmk/arm64/sleh.c
++++ b/osfmk/arm64/sleh.c
+@@ -1181,6 +1181,9 @@
+  * Uncategorized exceptions are a catch-all for general execution errors.
+  * ARM64_TODO: For now, we assume this is for undefined instruction exceptions.
+  */
++extern int zeta_user_instruction_compat(arm_saved_state_t *, uint32_t)
++    __attribute__((weak_import));
++
+ static void
+ handle_uncategorized(arm_saved_state_t *state)
+ {
+@@ -1189,7 +1192,7 @@
+ 	mach_msg_type_number_t     numcodes  = 2;
+ 	uint32_t                   instr     = 0;
+ 
+-	COPYIN(get_saved_state_pc(state), (char *)&instr, sizeof(instr));
++	int instruction_fetch_error = COPYIN(get_saved_state_pc(state), (char *)&instr, sizeof(instr));
+ 
+ #if CONFIG_DTRACE
+ 
+@@ -1252,6 +1255,13 @@
+ 		} else {
+ 			panic("Undefined kernel instruction: pc=%p instr=%x", (void*)get_saved_state_pc(state), instr);
+ 		}
++	}
++
++	/* Preserve kernel/debugger/AArch32 handling and normal failures. */
++	if (!instruction_fetch_error && PSR64_IS_USER64(get_saved_state_cpsr(state)) &&
++	    !IS_ARM_GDB_TRAP(instr) && zeta_user_instruction_compat &&
++	    zeta_user_instruction_compat(state, instr)) {
++		return;
+ 	}
+ 
+ 	/*
