@@ -39,6 +39,10 @@ on:
         description: Optional shell commands run in the UniXNU checkout before the kernel build
         required: false
         default: ""
+      post_build:
+        description: Optional checks using the completed kernel build and its real compile records
+        required: false
+        default: ""
       trust_cache_url:
         description: Trust cache bundle URL (optional)
         required: false
@@ -158,6 +162,13 @@ jobs:
           args=()
           if [ -n "$IPSW_URL" ]; then args+=(--ipsw "$IPSW_URL"); fi
           ./unixnu build kernel "${args[@]}"
+
+      - name: Run checks against the completed kernel build
+        if: inputs.post_build != ''
+        env:
+          POST_BUILD: ${{ inputs.post_build }}
+          DEVICE_DIR: ${{ github.workspace }}/device
+        run: bash -euo pipefail -c "$POST_BUILD"
 
       - name: Build userdata
         if: contains(inputs.steps, 'userdata')
