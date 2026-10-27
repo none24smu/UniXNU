@@ -14,8 +14,8 @@
 @@ -8197,3 +8204,8 @@
  	if (data_error) panic("offline scratch Data mount failed: %d", data_error);
 +#if defined(XNU_IOS27_CRYPTEXES) && XNU_IOS27_CRYPTEXES
-+	extern int native_ios27_data_store_require_resume(void);
-+	int store_error = native_ios27_data_store_require_resume();
++	extern int native_ios27_data_store_require_resume(uint64_t);
++	int store_error = native_ios27_data_store_require_resume(native_owner_data_seed_size);
 +	if (store_error) panic("iOS27 full Data store did not resume: %d", store_error);
 +#endif
 -#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
