@@ -216,6 +216,7 @@ jobs:
         with:
           name: unixnu-post-build-checks-${{ inputs.defconfig }}
           path: out/*/logs/**
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
 
@@ -235,6 +236,7 @@ jobs:
         with:
           name: unixnu-logs-${{ inputs.defconfig }}
           path: out/*/logs/**
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
 
