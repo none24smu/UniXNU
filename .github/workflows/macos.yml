@@ -163,13 +163,6 @@ jobs:
           if [ -n "$IPSW_URL" ]; then args+=(--ipsw "$IPSW_URL"); fi
           ./unixnu build kernel "${args[@]}"
 
-      - name: Run checks against the completed kernel build
-        if: inputs.post_build != ''
-        env:
-          POST_BUILD: ${{ inputs.post_build }}
-          DEVICE_DIR: ${{ github.workspace }}/device
-        run: bash -euo pipefail -c "$POST_BUILD"
-
       - name: Build userdata
         if: contains(inputs.steps, 'userdata')
         env:
@@ -208,6 +201,22 @@ jobs:
             out/*/payload/**
             out/*/logs/**
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Run checks against the completed kernel build
+        if: inputs.post_build != ''
+        env:
+          POST_BUILD: ${{ inputs.post_build }}
+          DEVICE_DIR: ${{ github.workspace }}/device
+        run: bash -euo pipefail -c "$POST_BUILD"
+
+      - name: Retain post-build check evidence
+        if: always() && inputs.post_build != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: unixnu-post-build-checks-${{ inputs.defconfig }}
+          path: out/*/logs/**
+          if-no-files-found: ignore
           retention-days: 7
 
       - name: Show build errors
