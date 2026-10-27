@@ -85,16 +85,51 @@ sources = [exported_source(name) for name in (
 sources += [patched, UFS / 'NativeUfs.cpp']
 # The Data seed provider (packed DBRDISK1 seed, persistent store through NativeUfs's end-of-userdata window).
 ram_block = os.environ.get('XNU_NATIVE_RAM_BLOCK', '0')
+ios27 = os.environ.get('XNU_IOS27_CRYPTEXES', '0')
+if ios27 not in ('0', '1'):
+    raise SystemExit('XNU_IOS27_CRYPTEXES must be 0 or 1')
 if ram_block not in ('0', '1'):
     raise SystemExit('XNU_NATIVE_RAM_BLOCK must be 0 or 1')
 if ram_block == '1':
-    sources.append(ROOT / 'drivers/NativeRamBlock/NativeRamBlock.cpp')
+    ram_source = ROOT / 'drivers/NativeRamBlock/NativeRamBlock.cpp'
+    if ios27 == '1':
+        # This source export, unlike the ordinary provider, refuses an absent,
+        # stale or incomplete direct store rather than initializing it.
+        import importlib.util
+        exporter_path = ROOT / 'scripts/prepare-zeta-ios27-native-storage.py'
+        spec = importlib.util.spec_from_file_location('ios27_store_export', exporter_path)
+        exporter = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(exporter)
+        export_dir = OUT / 'ios27-resume-provider'
+        if export_dir.exists():
+            shutil.rmtree(export_dir)
+        resume = exporter.export(ram_source.parent,
+            'fb61d6c0ce13570d55e0019bb44c4fd56893d943b014f2903d6cf38affed0ab0',
+            export_dir, ROOT / 'kits/zeta/NativeIos27DataStoreGuard.h')
+        (OUT / 'ios27-resume-provider.json').write_text(json.dumps(resume, indent=2) + '\n')
+        ram_source = Path(resume['output'])
+    sources.append(ram_source)
 verified = os.environ.get('XNU_NATIVE_UFS_VERIFIED_ROOT') == '1'
 owner_root = os.environ.get('XNU_NATIVE_UFS_OWNER_ROOT', '0')
 if owner_root not in ('0', '1') or (owner_root == '1' and not verified):
     raise SystemExit('Owner root binding requires the real verified UFS backend')
 if owner_root == '1':
     sources.append(ROOT / 'scripts/ufs-owner-root.cpp')
+profile_directory = None
+if ios27 == '1':
+    if ram_block != '1' or owner_root != '1' or not verified:
+        raise SystemExit('iOS27 cryptexes require verified owner UFS and resume-only Data')
+    header = Path(os.environ.get('XNU_IOS27_PROFILE_HEADER', ''))
+    if not header.is_file():
+        raise SystemExit('Set XNU_IOS27_PROFILE_HEADER to the generated namespace UUID header')
+    import re
+    identities = re.findall(r'#define ZETA_IOS27_(OS|SYSTEMOS|APPOS)_VOLUME_UUID "([0-9A-F-]{36})"', header.read_text())
+    if len(identities) != 3 or {name for name, _ in identities} != {'OS', 'SYSTEMOS', 'APPOS'}:
+        raise SystemExit('iOS27 profile requires all three namespace UUIDs')
+    profile_directory = OUT / 'ios27-profile'
+    profile_directory.mkdir(exist_ok=True)
+    shutil.copyfile(header, profile_directory / 'NativeIos27StorageProfile.h')
+    sources.append(ROOT / 'kits/zeta/NativeIos27CryptexVolumes.cpp')
 extra = []
 if verified:
     anchor = ROOT / 'scripts/zeta-owner-root-key.h'
@@ -131,6 +166,8 @@ def compile_one(source, record):
                 '-fno-stack-check',
                 '-Wall', '-Wextra', '-Wno-unused-parameter', '-Wno-deprecated-declarations',
                 '-Wno-c99-designator', '-Wno-reorder-init-list']
+    if profile_directory:
+        command += ['-I', str(profile_directory)]
     destination.with_suffix('.command.json').write_text(json.dumps(command, indent=2) + '\n')
     result = subprocess.run(command, cwd=record['directory'], capture_output=True, text=True)
     destination.with_suffix('.log').write_text(result.stdout + result.stderr)
@@ -152,6 +189,9 @@ def compile_one(source, record):
 
 for source in sources:
     compile_one(source, record)
+if ios27 == '1':
+    bsd = json.loads((OBJ / 'bsd/DEVELOPMENT/kern_exec.o.json').read_text().strip().rstrip(','))
+    compile_one(ROOT / 'kits/zeta/NativeIos27CryptexMount.c', bsd)
 if verified:
     recipes = list(OBJ.rglob('pthread_shims.o.json'))
     if len(recipes) != 1:
@@ -178,6 +218,9 @@ report = {'source_revision': REVISION, 'objects': len(objects),
           'missing_kernel_imports': missing, 'hardware_qualified': False, 'owner_policy_from_ufs': verified,
           'owner_mounted_root_binding': owner_root == '1', 'progress_observer_compiled': False,
           'native_ram_block': ram_block == '1',
+          'ios27_cryptex_helpers': ios27 == '1',
+          'ios27_resume_only_store': ios27 == '1',
+          'ios27_profile_sha256': hashlib.sha256((profile_directory / 'NativeIos27StorageProfile.h').read_bytes()).hexdigest() if profile_directory else None,
           'native_driver_sha256': hashlib.sha256(patched.read_bytes()).hexdigest()}
 (OUT / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
 if collisions or missing:
