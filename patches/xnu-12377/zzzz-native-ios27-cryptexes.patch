@@ -1,0 +1,23 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8190,3 +8190,10 @@
+ 	    VM_MAP_KERNEL_FLAGS_ANYWHERE());
++#if defined(XNU_IOS27_CRYPTEXES) && XNU_IOS27_CRYPTEXES
++	extern int native_ios27_cryptex_prepare(proc_t, user_addr_t);
++	boot_progress_stage("iOS27 cryptex mount enter");
++	int cryptex_error = native_ios27_cryptex_prepare(p, (user_addr_t)scratch_addr);
++	boot_progress_stage("iOS27 cryptex mount returned");
++	if (cryptex_error) panic("iOS27 owner cryptex mount failed: %d", cryptex_error);
++#endif
+ #if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT
+ 	boot_progress_stage("Data mount enter");
+@@ -8197,3 +8204,8 @@
+ 	if (data_error) panic("offline scratch Data mount failed: %d", data_error);
++#if defined(XNU_IOS27_CRYPTEXES) && XNU_IOS27_CRYPTEXES
++	extern int native_ios27_data_store_require_resume(void);
++	int store_error = native_ios27_data_store_require_resume();
++	if (store_error) panic("iOS27 full Data store did not resume: %d", store_error);
++#endif
+-#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS && (!defined(XNU_IOS27_CRYPTEXES) || !XNU_IOS27_CRYPTEXES)
+ 	extern int sheng_boot_watchdog_policy(void *, uint64_t);
