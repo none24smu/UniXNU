@@ -126,13 +126,13 @@ int main(int argc,char**argv){
  memcpy(testpage.bytes,"\1\2\3\4\11\12\13\14",8);validated_page(&child,0,&testpage,1,0);CHECK(syncs==2&&cs_ios27_text_fixup_applied==2);
  const char*overlap="legacy,0,01020304,05060708";reset(old,(unsigned)strlen(old)+1,overlap,(unsigned)strlen(overlap)+1);
  CHECK(cs_text_fixup_parsed==1&&!cs_ios27_text_fixup_parsed&&cs_ios27_text_fixup_rejected==1);
- char*large=malloc(4*1024*1024);CHECK(large);size_t used=0;
- for(unsigned i=0;i<CS_IOS27_TEXT_FIXUP_MAX+1;i++){int n=snprintf(large+used,4*1024*1024-used,"huge,%x,01020304,05060708",i*4);CHECK(n>0);used+=(size_t)n+1;if(i+1==CS_IOS27_TEXT_FIXUP_MAX){
+ size_t large_capacity=CS_IOS27_TEXT_FIXUP_MAX*48u+64u;char*large=malloc(large_capacity);CHECK(large);size_t used=0;
+ for(unsigned i=0;i<CS_IOS27_TEXT_FIXUP_MAX+1;i++){int n=snprintf(large+used,large_capacity-used,"huge,%x,01020304,05060708",i*4);CHECK(n>0);used+=(size_t)n+1;if(i+1==CS_IOS27_TEXT_FIXUP_MAX){
   reset(NULL,0,large,(unsigned)used);CHECK(cs_ios27_text_fixup_parsed==CS_IOS27_TEXT_FIXUP_MAX);
   struct vnode cache={"dyld_shared_cache_arm64e_x1.01"};validated_page(&cache,0,&testpage,1,0);CHECK(!syncs&&cs_ios27_text_fixup_lookup_steps<=8);
   for(unsigned j=0;j<PAGE_SIZE;j+=4)memcpy(testpage.bytes+j,"\1\2\3\4",4);
   struct vnode huge={"huge"};uint64_t steps=cs_ios27_text_fixup_lookup_steps;validated_page(&huge,(i*4)&~(uint64_t)PAGE_MASK,&testpage,1,0);
-  CHECK(cs_ios27_text_fixup_applied==1024&&syncs==1&&cs_ios27_text_fixup_lookup_steps-steps<=18);
+  CHECK(cs_ios27_text_fixup_applied==1024&&syncs==1&&cs_ios27_text_fixup_lookup_steps-steps<=19);
  }}
  reset(NULL,0,large,(unsigned)used);CHECK(!cs_ios27_text_fixup_parsed&&cs_ios27_text_fixup_rejected==1);free(large);
  char many[CS_IOS27_TEXT_FILE_MAX*32+32];used=0;for(unsigned i=0;i<CS_IOS27_TEXT_FILE_MAX+1;i++){int n=snprintf(many+used,sizeof(many)-used,"name%03u,0,00,01",i);CHECK(n>0);used+=(size_t)n+1;if(i+1==CS_IOS27_TEXT_FILE_MAX){reset(NULL,0,many,(unsigned)used);CHECK(cs_ios27_text_fixup_parsed==CS_IOS27_TEXT_FILE_MAX&&cs_ios27_text_file_count==CS_IOS27_TEXT_FILE_MAX);}}
@@ -147,7 +147,7 @@ int main(int argc,char**argv){
   }
   struct vnode node={f->name};unsigned before=cs_ios27_text_fixup_applied;validated_page(&node,page,&testpage,1,0);CHECK(cs_ios27_text_fixup_applied-before==i-first&&!memcmp(expected,testpage.bytes,PAGE_SIZE));pages++;
  }
- CHECK(cs_ios27_text_fixup_applied==28208&&syncs==pages);printf("PASS profile1 actual28208descriptors on%upages, signature/taint gates, table/page atomicity,65536cap and indexed misses\n",pages);free(table);return 0;
+ CHECK(cs_ios27_text_fixup_applied==28208&&syncs==pages);printf("PASS profile1 actual28208descriptors on%upages, signature/taint gates, table/page atomicity,131072cap and indexed misses\n",pages);free(table);return 0;
  #endif
 }
 '''
@@ -165,5 +165,5 @@ for profile in (0,1):
     built=subprocess.run(command,capture_output=True,text=True);(args.output/f'build{profile}.log').write_text(built.stdout+built.stderr);built.check_returncode()
     result=subprocess.run([str(exe),str(args.descriptors/'text-fixups-ios27.bin'),str(flat)],capture_output=True,text=True);(args.output/f'run{profile}.log').write_text(result.stdout+result.stderr);result.check_returncode();assert f'PASS profile{profile}' in result.stdout
     results.append({'profile':profile,'compiler_command':command,'passed':True,'log_sha256':hashlib.sha256((args.output/f'run{profile}.log').read_bytes()).hexdigest()})
-report={'schema':'zeta-ios27-production-text-fixups-host-v1','results':results,'patch_sha256':hashlib.sha256(patch.read_bytes()).hexdigest(),'production_c_sha256':hashlib.sha256(production.encode()).hexdigest(),'real_vm_hook_extracted':True,'real_private_loader_hook_extracted':True,'page_size':args.page_size,'max_records':65536,'max_files':256,'actual_descriptor_count':manifest['descriptor_count'],'original_files_checked':len(manifest['files']),'asan_ubsan':True,'kernel_compilation':False,'phone_commands':False,'limits':['Exact production validator and real post-validation conditional over explicit host vnode/ADT/page/cache peers','Native VM lock/lifecycle and actual kernel object compilation remain separate gates']}
+report={'schema':'zeta-ios27-production-text-fixups-host-v1','results':results,'patch_sha256':hashlib.sha256(patch.read_bytes()).hexdigest(),'production_c_sha256':hashlib.sha256(production.encode()).hexdigest(),'real_vm_hook_extracted':True,'real_private_loader_hook_extracted':True,'page_size':args.page_size,'max_records':131072,'max_files':512,'actual_descriptor_count':manifest['descriptor_count'],'original_files_checked':len(manifest['files']),'asan_ubsan':True,'kernel_compilation':False,'phone_commands':False,'limits':['Exact production validator and real post-validation conditional over explicit host vnode/ADT/page/cache peers','Native VM lock/lifecycle and actual kernel object compilation remain separate gates']}
 (args.output/'result.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report,indent=2))
