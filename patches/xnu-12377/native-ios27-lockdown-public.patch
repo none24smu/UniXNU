@@ -1,0 +1,24 @@
+diff --git a/bsd/kern/lockdown_mode.c b/bsd/kern/lockdown_mode.c
+--- a/bsd/kern/lockdown_mode.c
++++ b/bsd/kern/lockdown_mode.c
+@@ -39,6 +39,20 @@
+ 
+ SYSCTL_DECL(_security_mac);
+ SYSCTL_INT(_security_mac, OID_AUTO, lockdown_mode_state, CTLFLAG_RD | CTLFLAG_LOCKED, &lockdown_mode_state, 0, "Lockdown Mode state");
++
++/* iOS 27 libsystem_darwin requests an eight-byte public state and treats a
++ * missing query as fatal. Publish the same initialized kernel state; this
++ * does not change Lockdown Mode policy or NVRAM.
++ */
++static int
++sysctl_lockdown_mode_state_public SYSCTL_HANDLER_ARGS
++{
++	uint64_t state = (uint64_t)get_lockdown_mode_state();
++	return SYSCTL_OUT(req, &state, sizeof(state));
++}
++SYSCTL_PROC(_security_mac, OID_AUTO, lockdown_mode_state_public,
++    CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, 0, 0,
++    sysctl_lockdown_mode_state_public, "Q", "Public Lockdown Mode state");
+ 
+ __startup_func
+ void
