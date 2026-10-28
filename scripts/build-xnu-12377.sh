@@ -199,6 +199,12 @@ rebuild_on_change() {
   fi
 }
 
+# Optional large signed-text diagnostic table. Keep the flag confined to the
+# actual BSD validator record, with make's per-object cache invalidated on change.
+IOS27_TEXT_FIXUPS=$(flag XNU_IOS27_TEXT_FIXUPS)
+EXTRA_MAKE_ARGS+=("ubc_subr.o_CFLAGS_ADD=-DXNU_IOS27_TEXT_FIXUPS=$IOS27_TEXT_FIXUPS")
+rebuild_on_change ios27-text-fixups-mode "$IOS27_TEXT_FIXUPS" bsd/DEVELOPMENT/ubc_subr.o
+
 # BCM2837 start.s routes the core timers through the Raspberry Pi local interrupt controller (physical 0x40000040)
 # before the MMU is on; other boards need it off and use ArmCpu's GICv3 provider.
 NATIVE_ARCH_TIMER=$(flag XNU_NATIVE_ARCH_TIMER)

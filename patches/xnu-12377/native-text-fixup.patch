@@ -8,7 +8,7 @@
  
  extern void Debugger(const char *message);
  
-@@ -5996,6 +5997,171 @@
+@@ -5996,6 +5997,366 @@
  	return validated;
  }
  
@@ -105,6 +105,195 @@
 +	return true;
 +}
 +
++/* Explicit diagnostic profile. The ordinary32-entry table above is unchanged. */
++#ifndef XNU_IOS27_TEXT_FIXUPS
++#define XNU_IOS27_TEXT_FIXUPS 0
++#endif
++#if XNU_IOS27_TEXT_FIXUPS != 0 && XNU_IOS27_TEXT_FIXUPS != 1
++#error XNU_IOS27_TEXT_FIXUPS must be0or1
++#endif
++#if XNU_IOS27_TEXT_FIXUPS
++#define CS_IOS27_TEXT_FIXUP_MAX 32768
++#define CS_IOS27_TEXT_FILE_MAX 64
++static struct cs_text_fixup cs_ios27_text_fixups[CS_IOS27_TEXT_FIXUP_MAX];
++static struct { uint32_t first, end; } cs_ios27_text_files[CS_IOS27_TEXT_FILE_MAX];
++static uint32_t cs_ios27_text_file_count;
++uint32_t cs_ios27_text_fixup_parsed;
++uint32_t cs_ios27_text_fixup_applied;
++uint32_t cs_ios27_text_fixup_rejected;
++uint32_t cs_ios27_text_fixup_mismatched_pages;
++uint64_t cs_ios27_text_fixup_page_lookups;
++uint64_t cs_ios27_text_fixup_lookup_steps;
++
++static bool
++cs_ios27_text_fixup_parse(const char *arg, struct cs_text_fixup *f)
++{
++	const char *s = arg;
++	uint32_t n = 0;
++	memset(f, 0, sizeof(*f));
++	for (; *s && *s != ','; s++) {
++		if (!( (*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') ||
++		    (*s >= '0' && *s <= '9') || *s == '_' || *s == '-' || *s == '.') ||
++		    n + 1 >= sizeof(f->name)) {
++			return false;
++		}
++		f->name[n++] = *s;
++	}
++	if (!n || *s != ',') {
++		return false;
++	}
++	s++;
++	uint32_t digits = 0;
++	for (; *s && *s != ','; s++) {
++		int v = cs_text_fixup_hex(*s);
++		if (v < 0 || ++digits > 16 || f->offset > (UINT64_MAX - (uint64_t)v) / 16) {
++			return false;
++		}
++		f->offset = f->offset * 16 + (uint64_t)v;
++	}
++	if (!digits || *s != ',') {
++		return false;
++	}
++	s++;
++	/* Exactly two remaining fields: the legacy byte parser also accepts a
++	 * trailing comma, which this profile must reject. */
++	const char *comma = strchr(s, ',');
++	if (comma == NULL || strchr(comma + 1, ',') != NULL) {
++		return false;
++	}
++	n = cs_text_fixup_bytes(&s, f->original);
++	if (!n || cs_text_fixup_bytes(&s, f->replacement) != n || *s ||
++	    f->offset > UINT64_MAX - n || (f->offset & PAGE_MASK) + n > PAGE_SIZE) {
++		return false;
++	}
++	f->length = n;
++	return true;
++}
++
++static void
++cs_ios27_text_fixup_init(void)
++{
++	DTEntry chosen;
++	void const *table;
++	unsigned int size;
++	uint32_t parsed = 0, files = 0;
++	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
++	    SecureDTGetProperty(chosen, "text-fixups-ios27", &table, &size) != kSuccess) {
++		return;
++	}
++	if (table == NULL || !size || size > CS_IOS27_TEXT_FIXUP_MAX * 160u) {
++		goto reject;
++	}
++	const char *s = table, *end = s + size;
++	while (s < end) {
++		char entry[160];
++		size_t length = strnlen(s, (size_t)(end - s));
++		if (!length || length == (size_t)(end - s) || length >= sizeof(entry) || parsed == CS_IOS27_TEXT_FIXUP_MAX) {
++			goto reject;
++		}
++		strlcpy(entry, s, length + 1);
++		struct cs_text_fixup *f = &cs_ios27_text_fixups[parsed];
++		if (!cs_ios27_text_fixup_parse(entry, f)) {
++			goto reject;
++		}
++		int order = parsed ? strcmp(cs_ios27_text_fixups[parsed - 1].name, f->name) : -1;
++		if (order > 0 || (parsed && order == 0 &&
++		    cs_ios27_text_fixups[parsed - 1].offset + cs_ios27_text_fixups[parsed - 1].length > f->offset)) {
++			goto reject;
++		}
++		if (!parsed || order != 0) {
++			if (files == CS_IOS27_TEXT_FILE_MAX) {
++				goto reject;
++			}
++			if (files) {
++				cs_ios27_text_files[files - 1].end = parsed;
++			}
++			cs_ios27_text_files[files++].first = parsed;
++		}
++		/* Keep both mechanisms deterministic: a large table may not overlap
++		 * any already accepted legacy/boot-argument entry. */
++		for (uint32_t i = 0; i < cs_text_fixup_count; i++) {
++			const struct cs_text_fixup *old = &cs_text_fixups[i];
++			if (old->offset > UINT64_MAX - old->length ||
++			    (!strcmp(old->name, f->name) && old->offset < f->offset + f->length && f->offset < old->offset + old->length)) {
++				goto reject;
++			}
++		}
++		parsed++;
++		s += length + 1;
++	}
++	if (files) {
++		cs_ios27_text_files[files - 1].end = parsed;
++	}
++	/* Publish only a complete valid sorted table; partial arrays stay inert. */
++	cs_ios27_text_file_count = files;
++	cs_ios27_text_fixup_parsed = parsed;
++	return;
++reject:
++	cs_ios27_text_file_count = 0;
++	cs_ios27_text_fixup_parsed = 0;
++	cs_ios27_text_fixup_rejected++;
++	printf("text-fixups-ios27: entire table rejected\n");
++}
++
++static uint32_t
++cs_ios27_text_fixup_page(struct vnode *vp, memory_object_offset_t page_offset, void *kva)
++{
++	uint32_t written = 0, steps = 0;
++	if (!cs_ios27_text_fixup_parsed || vp == NULLVP || vp->v_name == NULL || kva == NULL ||
++	    (page_offset & PAGE_MASK) || page_offset > UINT64_MAX - PAGE_SIZE) {
++		return 0;
++	}
++	os_atomic_inc(&cs_ios27_text_fixup_page_lookups, relaxed);
++	uint32_t lo = 0, hi = cs_ios27_text_file_count;
++	while (lo < hi) {
++		uint32_t mid = lo + (hi - lo) / 2;
++		steps++;
++		if (strcmp(cs_ios27_text_fixups[cs_ios27_text_files[mid].first].name, vp->v_name) < 0) {
++			lo = mid + 1;
++		} else {
++			hi = mid;
++		}
++	}
++	if (lo == cs_ios27_text_file_count || strcmp(cs_ios27_text_fixups[cs_ios27_text_files[lo].first].name, vp->v_name)) {
++		goto out;
++	}
++	uint32_t limit = cs_ios27_text_files[lo].end;
++	lo = cs_ios27_text_files[lo].first;
++	hi = limit;
++	while (lo < hi) {
++		uint32_t mid = lo + (hi - lo) / 2;
++		steps++;
++		if (cs_ios27_text_fixups[mid].offset < page_offset) {
++			lo = mid + 1;
++		} else {
++			hi = mid;
++		}
++	}
++	uint32_t first = lo;
++	/* No new-profile mutation until every descriptor on this page matches. */
++	for (; lo < limit && cs_ios27_text_fixups[lo].offset < page_offset + PAGE_SIZE; lo++) {
++		const struct cs_text_fixup *f = &cs_ios27_text_fixups[lo];
++		if (f->offset + f->length > page_offset + PAGE_SIZE ||
++		    memcmp((uint8_t *)kva + (f->offset - page_offset), f->original, f->length)) {
++			os_atomic_inc(&cs_ios27_text_fixup_mismatched_pages, relaxed);
++			goto out;
++		}
++	}
++	for (uint32_t i = first; i < lo; i++) {
++		const struct cs_text_fixup *f = &cs_ios27_text_fixups[i];
++		memcpy((uint8_t *)kva + (f->offset - page_offset), f->replacement, f->length);
++		written++;
++		if (os_atomic_inc(&cs_ios27_text_fixup_applied, relaxed) <= 16) {
++			printf("text-fixup-ios27: %s+0x%llx (%u bytes) applied\n", f->name, f->offset, f->length);
++		}
++	}
++out:
++	os_atomic_add(&cs_ios27_text_fixup_lookup_steps, steps, relaxed);
++	return written;
++}
++#endif /* XNU_IOS27_TEXT_FIXUPS */
++
 +static void
 +cs_text_fixup_init(void)
 +{
@@ -145,6 +334,9 @@
 +		}
 +	}
 +	cs_text_fixup_parsed = cs_text_fixup_count;
++#if XNU_IOS27_TEXT_FIXUPS
++	cs_ios27_text_fixup_init();
++#endif
 +}
 +STARTUP(EARLY_BOOT, STARTUP_RANK_MIDDLE, cs_text_fixup_init);
 +
@@ -174,6 +366,9 @@
 +			printf("text-fixup: %s+0x%llx (%u bytes) applied\n", f->name, f->offset, f->length);
 +		}
 +	}
++#if XNU_IOS27_TEXT_FIXUPS
++	written += cs_ios27_text_fixup_page(vp, page_offset, kva);
++#endif
 +	return written;
 +}
 +
