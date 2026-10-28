@@ -1,0 +1,45 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8218,15 +8218,15 @@
+ 	/* Explicit owner-runtime composition. Default stock-mount diagnostics keep
+ 	 * their original namespace. Code still needs the exact owner trust cache. */
+ 	uint32_t owner_runtime = 0;
+-	if (!error && PE_parse_boot_argn("ios27-owner-runtime", &owner_runtime, sizeof(owner_runtime)) && owner_runtime == 1) {
++	if (!error && PE_parse_boot_argn("ios27-owner-runtime", &owner_runtime, sizeof(owner_runtime)) && (owner_runtime == 1 || owner_runtime == 2)) {
+ 		static const char system[] = "/System/Cryptexes/OS/usr/lib", owner[] = "/private/var/Library";
+ 		static const char point[] = "/usr/lib", runtime[] = "/private/var/Library/libobjc-trampolines.dylib";
+ 		vnode_t entry = NULLVP;
+ 		error = vnode_lookup(runtime, 0, &entry, vfs_context_current());
+ 		if (!error) vnode_put(entry);
+ 		/* Neither upper directory may replace the converted MainOS dyld. */
+-		const char *forbidden[] = {"/System/Cryptexes/OS/usr/lib/dyld", "/private/var/Library/dyld"};
+-		for (unsigned i = 0; !error && i < 2; i++) {
++		const char *forbidden[] = {"/System/Cryptexes/OS/usr/lib/dyld", "/private/var/Library/dyld", "/private/var/Library/xpcproxy"};
++		for (unsigned i = 0; !error && i < (owner_runtime == 2 ? 3U : 2U); i++) {
+ 			entry = NULLVP;
+ 			int lookup = vnode_lookup(forbidden[i], 0, &entry, vfs_context_current());
+ 			if (!lookup) { vnode_put(entry); error = EAUTH; }
+@@ -8243,6 +8243,23 @@
+ 			    "/usr/lib/dyld", "/usr/lib/libobjc-trampolines.dylib", &stage, &status);
+ 			if (status || stage != 5) error = status ? status : EIO;
+ 		}
++		/* Mode 2 also composes the exact owner daemon copies. Their derived
++		 * CodeDirectories must independently pass the loaded owner trust cache. */
++		if (!error && owner_runtime == 2) {
++			const char *required[] = {"/private/var/Library/configd", "/private/var/Library/containermanagerd",
++			    "/private/var/Library/containermanagerd_system"};
++			for (unsigned i = 0; !error && i < 3; i++) {
++				entry = NULLVP;
++				error = vnode_lookup(required[i], 0, &entry, vfs_context_current());
++				if (!error) vnode_put(entry);
++			}
++			static const char exec_point[] = "/usr/libexec";
++			if (!error) {
++				native_gpu_addon_mount(p, scratch, 0x400, owner, sizeof(owner), exec_point, sizeof(exec_point),
++				    "/usr/libexec/xpcproxy", "/usr/libexec/containermanagerd_system", &stage, &status);
++				if (status || stage != 5) error = status ? status : EIO;
++			}
++		}
+ 		printf("Ios27Namespace: owner runtime status=%d stage=%d\n", error, stage);
+ 	}
+ #endif

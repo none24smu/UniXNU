@@ -36,7 +36,7 @@ code = r'''
 #endif
 typedef void *vnode_t;
 #define NULLVP ((vnode_t)0)
-static unsigned enabled, watchdog, missing, forbidden, lookups, put_count, mounts;
+static unsigned enabled, watchdog, missing, forbidden, missing_daemon, lookups, put_count, mounts;
 static unsigned bad_mount, bad_stage, policy_calls, policy_error, panics;
 static int PE_parse_boot_argn(const char *name, void *out, unsigned size) {
  assert(size == sizeof(uint32_t));
@@ -49,7 +49,9 @@ static int vnode_lookup(const char *name,int flags,vnode_t *out,void *context) {
  if (!strcmp(name,"/private/var/Library/libobjc-trampolines.dylib")) {
   if(missing)return ENOENT;*out=(void *)0x200;return 0;
  }
- assert(!strcmp(name,"/System/Cryptexes/OS/usr/lib/dyld") || !strcmp(name,"/private/var/Library/dyld"));
+ const char *required[]={"/private/var/Library/configd","/private/var/Library/containermanagerd","/private/var/Library/containermanagerd_system"};
+ for(unsigned i=0;i<3;i++)if(!strcmp(name,required[i])){if(missing_daemon==i+1)return ENOENT;*out=(void *)0x200;return 0;}
+ assert(!strcmp(name,"/System/Cryptexes/OS/usr/lib/dyld") || !strcmp(name,"/private/var/Library/dyld") || !strcmp(name,"/private/var/Library/xpcproxy"));
  if (forbidden) {*out=(void *)0x200;return 0;}return ENOENT;
 }
 static void vnode_put(vnode_t v) {assert(v==(void *)0x200);++put_count;}
@@ -57,7 +59,7 @@ static void native_gpu_addon_mount(void *p,uint64_t scratch,uint64_t offset,cons
  const char *to,unsigned long to_size,const char *visible,const char *own,volatile int *stage,volatile int *status) {
  assert(p==(void *)0x300 && scratch==0x100000 && offset==0x400);
  assert(from_size==strlen(from)+1 && to_size==strlen(to)+1);
- assert(!strcmp(to,"/usr/lib") && !strcmp(visible,"/usr/lib/dyld") && !strcmp(own,"/usr/lib/libobjc-trampolines.dylib"));
+ assert(!strcmp(to,mounts==2?"/usr/libexec":"/usr/lib") && !strcmp(visible,mounts==2?"/usr/libexec/xpcproxy":"/usr/lib/dyld") && !strcmp(own,mounts==2?"/usr/libexec/containermanagerd_system":"/usr/lib/libobjc-trampolines.dylib"));
  assert(!strcmp(from,mounts?"/private/var/Library":"/System/Cryptexes/OS/usr/lib"));
  ++mounts;*stage=(bad_stage==mounts)?4:5;*status=(bad_mount==mounts)?EIO:0;
 }
@@ -73,10 +75,14 @@ NAMESPACE
 static void test_policy(void) {void *p=(void *)0x300;uint64_t scratch_addr=0x100000;
 POLICY
 }
-static void reset(void) {enabled=watchdog=missing=forbidden=lookups=put_count=mounts=bad_mount=bad_stage=policy_calls=policy_error=panics=0;}
+static void reset(void) {enabled=watchdog=missing=forbidden=missing_daemon=lookups=put_count=mounts=bad_mount=bad_stage=policy_calls=policy_error=panics=0;}
 int main(void) {
  reset();assert(!test_namespace());assert(!lookups && !mounts);
- reset();enabled=2;assert(!test_namespace());assert(!lookups && !mounts);
+ reset();enabled=3;assert(!test_namespace());assert(!lookups && !mounts);
+ reset();enabled=2;assert(!test_namespace());assert(lookups==7 && put_count==4 && mounts==3);
+ for(unsigned n=1;n<=3;n++){reset();enabled=2;missing_daemon=n;assert(test_namespace()==ENOENT && mounts==2);}
+ reset();enabled=2;bad_mount=3;assert(test_namespace()==EIO && mounts==3);
+ reset();enabled=2;bad_stage=3;assert(test_namespace()==EIO && mounts==3);
  reset();enabled=1;assert(!test_namespace());assert(lookups==3 && put_count==1 && mounts==2);
  reset();enabled=missing=1;assert(test_namespace()==ENOENT);assert(lookups==1 && !put_count && !mounts);
  reset();enabled=forbidden=1;assert(test_namespace()==EAUTH);assert(lookups==2 && put_count==2 && !mounts);
