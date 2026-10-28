@@ -14,7 +14,8 @@ import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--source',required=True,type=Path)
-p.add_argument('--descriptors',required=True,type=Path);p.add_argument('--output',required=True,type=Path);args=p.parse_args()
+p.add_argument('--descriptors',required=True,type=Path);p.add_argument('--output',required=True,type=Path)
+p.add_argument('--page-size',type=int,choices=(4096,16384),default=4096);args=p.parse_args()
 args.output.mkdir(parents=True,exist_ok=False)
 patch=ROOT/'patches/xnu-12377/native-text-fixup.patch'
 names=['bsd/kern/ubc_subr.c','osfmk/vm/vm_fault.c','osfmk/vm/vm_protos.h']
@@ -140,8 +141,12 @@ int main(int argc,char**argv){
  #endif
 }
 '''
+manifest=json.loads((args.descriptors/'manifest.json').read_text())
+header=header.replace('#define PAGE_SIZE 4096u',f'#define PAGE_SIZE {args.page_size}u').replace('#define PAGE_MASK 4095u',f'#define PAGE_MASK {args.page_size-1}u')
+tests=tests.replace('28208',str(manifest['descriptor_count'])).replace('cs_ios27_text_fixup_applied==1024','cs_ios27_text_fixup_applied==PAGE_SIZE/4')
+tests=tests.replace('child,ffe,00010203,04050607',f'child,{args.page_size-2:x},00010203,04050607')
 source=header+production+wrapper+tests;(args.output/'test.c').write_text(source)
-manifest=json.loads((args.descriptors/'manifest.json').read_text());flat=args.output/'originals';flat.mkdir()
+flat=args.output/'originals';flat.mkdir()
 for file in manifest['files']:
     original=Path(file['original']['path']);assert hashlib.sha256(original.read_bytes()).hexdigest()==file['original']['sha256'];shutil.copy2(original,flat/file['basename'])
 results=[]
@@ -150,5 +155,5 @@ for profile in (0,1):
     built=subprocess.run(command,capture_output=True,text=True);(args.output/f'build{profile}.log').write_text(built.stdout+built.stderr);built.check_returncode()
     result=subprocess.run([str(exe),str(args.descriptors/'text-fixups-ios27.bin'),str(flat)],capture_output=True,text=True);(args.output/f'run{profile}.log').write_text(result.stdout+result.stderr);result.check_returncode();assert f'PASS profile{profile}' in result.stdout
     results.append({'profile':profile,'compiler_command':command,'passed':True,'log_sha256':hashlib.sha256((args.output/f'run{profile}.log').read_bytes()).hexdigest()})
-report={'schema':'zeta-ios27-production-text-fixups-host-v1','results':results,'patch_sha256':hashlib.sha256(patch.read_bytes()).hexdigest(),'production_c_sha256':hashlib.sha256(production.encode()).hexdigest(),'real_vm_hook_extracted':True,'actual_descriptor_count':manifest['descriptor_count'],'original_files_checked':len(manifest['files']),'asan_ubsan':True,'kernel_compilation':False,'phone_commands':False,'limits':['Exact production validator and real post-validation conditional over explicit host vnode/ADT/page/cache peers','Native VM lock/lifecycle and actual kernel object compilation remain separate gates']}
+report={'schema':'zeta-ios27-production-text-fixups-host-v1','results':results,'patch_sha256':hashlib.sha256(patch.read_bytes()).hexdigest(),'production_c_sha256':hashlib.sha256(production.encode()).hexdigest(),'real_vm_hook_extracted':True,'page_size':args.page_size,'actual_descriptor_count':manifest['descriptor_count'],'original_files_checked':len(manifest['files']),'asan_ubsan':True,'kernel_compilation':False,'phone_commands':False,'limits':['Exact production validator and real post-validation conditional over explicit host vnode/ADT/page/cache peers','Native VM lock/lifecycle and actual kernel object compilation remain separate gates']}
 (args.output/'result.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report,indent=2))
