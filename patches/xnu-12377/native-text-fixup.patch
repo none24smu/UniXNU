@@ -8,7 +8,7 @@
  
  extern void Debugger(const char *message);
  
-@@ -5996,6 +5997,366 @@
+@@ -5996,6 +5997,473 @@
  	return validated;
  }
  
@@ -372,6 +372,113 @@
 +	return written;
 +}
 +
++/* Work only on the loader's private read buffer, never on a pager page.
++ * UBC may already contain translated text from an earlier execution. Restore
++ * only exact admitted replacement bytes in this copy; cs_validate_range still
++ * verifies its complete original signature, including every non-target byte.
++ */
++uint32_t cs_text_fixup_restored_ranges;
++uint64_t cs_text_fixup_restored_records;
++
++static int
++cs_text_fixup_restore_one(const struct cs_text_fixup *f, memory_object_offset_t offset,
++    uint8_t *data, size_t size, bool write)
++{
++	if (f->length > CS_TEXT_FIXUP_BYTES || f->offset > UINT64_MAX - f->length) {
++		return -1;
++	}
++	if (f->offset >= offset + size || f->offset + f->length <= offset) {
++		return 0;
++	}
++	if (f->offset < offset || f->offset + f->length > offset + size) {
++		return -1;
++	}
++	uint8_t *at = data + (f->offset - offset);
++	if (memcmp(at, f->original, f->length) == 0) {
++		return 0;
++	}
++	if (memcmp(at, f->replacement, f->length) != 0) {
++		return -1;
++	}
++	if (write) {
++		memcpy(at, f->original, f->length);
++	}
++	return 1;
++}
++
++uint32_t
++cs_text_fixup_restore_range(struct vnode *vp, memory_object_offset_t offset, void *data, size_t size)
++{
++	uint32_t first = 0, limit = 0, restored = 0;
++	if (vp == NULLVP || vp->v_name == NULL || data == NULL || size == 0 || offset > UINT64_MAX - size) {
++		return 0;
++	}
++#if XNU_IOS27_TEXT_FIXUPS
++	/* Find only this file's intersecting descriptor interval. */
++	uint32_t lo = 0, hi = cs_ios27_text_file_count;
++	while (lo < hi) {
++		uint32_t mid = lo + (hi - lo) / 2;
++		if (strcmp(cs_ios27_text_fixups[cs_ios27_text_files[mid].first].name, vp->v_name) < 0) {
++			lo = mid + 1;
++		} else {
++			hi = mid;
++		}
++	}
++	if (lo < cs_ios27_text_file_count && !strcmp(cs_ios27_text_fixups[cs_ios27_text_files[lo].first].name, vp->v_name)) {
++		uint32_t file_first = cs_ios27_text_files[lo].first;
++		limit = cs_ios27_text_files[lo].end;
++		lo = file_first;
++		hi = limit;
++		while (lo < hi) {
++			uint32_t mid = lo + (hi - lo) / 2;
++			if (cs_ios27_text_fixups[mid].offset < offset) {
++				lo = mid + 1;
++			} else {
++				hi = mid;
++			}
++		}
++		first = lo;
++		if (first > file_first && cs_ios27_text_fixups[first - 1].offset + cs_ios27_text_fixups[first - 1].length > offset) {
++			first--;
++		}
++		lo = first;
++		while (lo < limit && cs_ios27_text_fixups[lo].offset < offset + size) {
++			lo++;
++		}
++		limit = lo;
++	}
++#endif
++	/* Preflight the whole copy before restoring any target. Unknown or partial
++	 * target bytes stay untouched and therefore fail ordinary signature checks. */
++	for (unsigned int pass = 0; pass != 2; pass++) {
++		for (uint32_t i = 0; i < cs_text_fixup_count; i++) {
++			const struct cs_text_fixup *f = &cs_text_fixups[i];
++			if (!strcmp(f->name, vp->v_name)) {
++				int result = cs_text_fixup_restore_one(f, offset, data, size, pass != 0);
++				if (result < 0) { return 0; }
++				if (pass) { restored += (uint32_t)result; }
++			}
++		}
++#if XNU_IOS27_TEXT_FIXUPS
++		for (uint32_t i = first; i < limit; i++) {
++			int result = cs_text_fixup_restore_one(&cs_ios27_text_fixups[i], offset, data, size, pass != 0);
++			if (result < 0) { return 0; }
++			if (pass) { restored += (uint32_t)result; }
++		}
++#else
++		(void)first;
++		(void)limit;
++#endif
++	}
++	if (restored) {
++		os_atomic_add(&cs_text_fixup_restored_records, restored, relaxed);
++		if (os_atomic_inc(&cs_text_fixup_restored_ranges, relaxed) <= 16) {
++			printf("text-fixup: %s private loader copy restored %u records before signature validation\n", vp->v_name, restored);
++		}
++	}
++	return restored;
++}
++
  boolean_t
  cs_validate_range(
  	struct vnode    *vp,
@@ -404,11 +511,30 @@
  	    page->vmp_cs_tainted == VMP_CS_ALL_FALSE) {
 --- a/osfmk/vm/vm_protos.h
 +++ b/osfmk/vm/vm_protos.h
-@@ -285,6 +285,7 @@
+@@ -285,6 +285,8 @@
      const void *data,
      vm_size_t size,
      unsigned *result);
 +extern uint32_t cs_text_fixup_page(struct vnode *vp, memory_object_offset_t page_offset, void *kva);
++extern uint32_t cs_text_fixup_restore_range(struct vnode *vp, memory_object_offset_t offset, void *data, size_t size);
  extern void cs_validate_page(
  	struct vnode *vp,
  	memory_object_t pager,
+--- a/bsd/kern/mach_loader.c
++++ b/bsd/kern/mach_loader.c
+@@ -1404,6 +1404,15 @@ parse_machfile(
+ 		}
+ 	}
+ 
++#if __arm64__
++	/* addr is a private kalloc/vn_rdwr copy, not the shared UBC pager page.
++	 * A prior execution may have translated the cached text. Reconstruct only
++	 * those exact admitted bytes before parsing and ordinary signature checks.
++	 * The executable mapping and its cached translated instructions stay intact.
++	 */
++	cs_text_fixup_restore_range(vp, (memory_object_offset_t)file_offset, addr, alloc_size);
++#endif
++
+ 	/*
+ 	 *  Scan through the commands, processing each one as necessary.
+ 	 *  We parse in three passes through the headers:
