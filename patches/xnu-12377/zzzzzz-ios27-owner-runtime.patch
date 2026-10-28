@@ -1,0 +1,64 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8170,6 +8170,38 @@
+ 	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
+ 	if (!error) native_owner_data_stage = 4;
+ 	if (!error) native_gpu_addon_prepare(p, scratch);
++#if defined(XNU_IOS27_CRYPTEXES) && XNU_IOS27_CRYPTEXES
++	/* Explicit owner-runtime composition. Default stock-mount diagnostics keep
++	 * their original namespace. Code still needs the exact owner trust cache. */
++	uint32_t owner_runtime = 0;
++	if (!error && PE_parse_boot_argn("ios27-owner-runtime", &owner_runtime, sizeof(owner_runtime)) && owner_runtime == 1) {
++		static const char system[] = "/System/Cryptexes/OS/usr/lib", owner[] = "/private/var/Library";
++		static const char point[] = "/usr/lib", runtime[] = "/private/var/Library/libobjc-trampolines.dylib";
++		vnode_t entry = NULLVP;
++		error = vnode_lookup(runtime, 0, &entry, vfs_context_current());
++		if (!error) vnode_put(entry);
++		/* Neither upper directory may replace the converted MainOS dyld. */
++		const char *forbidden[] = {"/System/Cryptexes/OS/usr/lib/dyld", "/private/var/Library/dyld"};
++		for (unsigned i = 0; !error && i < 2; i++) {
++			entry = NULLVP;
++			int lookup = vnode_lookup(forbidden[i], 0, &entry, vfs_context_current());
++			if (!lookup) { vnode_put(entry); error = EAUTH; }
++			else if (lookup != ENOENT) error = lookup;
++		}
++		volatile int stage = 0, status = -1;
++		if (!error) {
++			native_gpu_addon_mount(p, scratch, 0x400, system, sizeof(system), point, sizeof(point),
++			    "/usr/lib/dyld", "/usr/lib/libobjc-trampolines.dylib", &stage, &status);
++			if (status || stage != 5) error = status ? status : EIO;
++		}
++		if (!error) {
++			native_gpu_addon_mount(p, scratch, 0x400, owner, sizeof(owner), point, sizeof(point),
++			    "/usr/lib/dyld", "/usr/lib/libobjc-trampolines.dylib", &stage, &status);
++			if (status || stage != 5) error = status ? status : EIO;
++		}
++		printf("Ios27Namespace: owner runtime status=%d stage=%d\n", error, stage);
++	}
++#endif
+ done:
+ 	if (data_root) vnode_put(data_root);
+ 	native_owner_data_status = error;
+@@ -8338,12 +8370,21 @@
+ 	int store_error = native_ios27_data_store_require_resume(native_owner_data_seed_size);
+ 	if (store_error) panic("iOS27 full Data store did not resume: %d", store_error);
+ #endif
+-#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS && (!defined(XNU_IOS27_CRYPTEXES) || !XNU_IOS27_CRYPTEXES)
++#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
++#if defined(XNU_IOS27_CRYPTEXES) && XNU_IOS27_CRYPTEXES
++	/* The full-stock profile must opt in to this one unavailable-backend
++	 * diagnostic; do not import the older lite policy implicitly. */
++	uint32_t isolated_watchdog = 0;
++	if (PE_parse_boot_argn("sheng-disable-watchdogd", &isolated_watchdog, sizeof(isolated_watchdog)) && isolated_watchdog == 1) {
++#endif
+ 	extern int sheng_boot_watchdog_policy(void *, uint64_t);
+ 	boot_progress_stage("temporary watchdog launch policy enter");
+ 	int policy_error=sheng_boot_watchdog_policy(p, (uint64_t)scratch_addr);
+ 	if (policy_error) panic("sheng watchdog launch policy failed: %d", policy_error);
+ 	boot_progress_stage("temporary watchdog launch policy ready");
++#if defined(XNU_IOS27_CRYPTEXES) && XNU_IOS27_CRYPTEXES
++	}
++#endif
+ #endif
+ #endif
+ #if CONFIG_MEMORYSTATUS
