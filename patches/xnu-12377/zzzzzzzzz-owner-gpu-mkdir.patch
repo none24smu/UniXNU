@@ -1,0 +1,33 @@
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -10498,6 +10498,30 @@
+ 	return error;
+ }
+ 
++/* Owner GPU package installation over the existing kernel USB shell.
++ * Kernel strings stay UIO_SYSSPACE; no userspace pointer/structure layout guess.
++ * Limit this bring-up entry to the additive owner GPU tree. */
++int native_owner_mkdir_gpu_path(const char *path);
++int
++native_owner_mkdir_gpu_path(const char *path)
++{
++	static const char prefix[] = "/private/var/ngpu";
++	if (!path || strncmp(path, prefix, sizeof(prefix) - 1) ||
++	    (path[sizeof(prefix) - 1] && path[sizeof(prefix) - 1] != '/')) return EINVAL;
++	for (const char *component = path; *component;) {
++		if (*component == '/') { component++; continue; }
++		const char *end = component;
++		while (*end && *end != '/') end++;
++		if ((end - component == 1 && component[0] == '.') ||
++		    (end - component == 2 && component[0] == '.' && component[1] == '.')) return EINVAL;
++		component = end;
++	}
++	struct vnode_attr va;
++	VATTR_INIT(&va);
++	VATTR_SET(&va, va_mode, 0755);
++	return mkdir1at(vfs_context_current(), CAST_USER_ADDR_T(path), &va, AT_FDCWD, UIO_SYSSPACE);
++}
++
+ /*
+  * mkdir_extended: Create a directory; with extended security (ACL).
+  *
