@@ -97,6 +97,11 @@ int main(int argc,char**argv){
  reset(old,(unsigned)strlen(old)+1,NULL,0);CHECK(cs_text_fixup_parsed==1);
  memcpy(testpage.bytes,"\1\2\3\4",4);validated_page(&legacy,0,&testpage,0,0);CHECK(!syncs&&!memcmp(testpage.bytes,"\1\2\3\4",4));
  validated_page(&legacy,0,&testpage,1,1);CHECK(!syncs);validated_page(&legacy,0,&testpage,1,0);CHECK(syncs==1&&!memcmp(testpage.bytes,"\5\6\7\10",4));
+ uint8_t private_copy[PAGE_SIZE];memcpy(private_copy,testpage.bytes,PAGE_SIZE);
+ CHECK(cs_text_fixup_restore_range(&legacy,0,private_copy,PAGE_SIZE)==1&&!memcmp(private_copy,"\1\2\3\4",4));
+ CHECK(!memcmp(testpage.bytes,"\5\6\7\10",4));
+ private_copy[0]=99;CHECK(!cs_text_fixup_restore_range(&legacy,0,private_copy,PAGE_SIZE)&&private_copy[0]==99);
+
  #if !XNU_IOS27_TEXT_FIXUPS
  const char*next="child,0,01020304,05060708";reset(NULL,0,next,(unsigned)strlen(next)+1);CHECK(!cs_text_fixup_parsed&&sizeof(cs_text_fixups)/sizeof(cs_text_fixups[0])==32);
  struct vnode child={"child"};memcpy(testpage.bytes,"\1\2\3\4",4);validated_page(&child,0,&testpage,1,0);CHECK(!syncs&&!memcmp(testpage.bytes,"\1\2\3\4",4));
