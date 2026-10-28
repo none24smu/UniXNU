@@ -7,6 +7,7 @@ No kernel build, working-source patch, root image or phone access occurs.
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -36,6 +37,13 @@ with tempfile.TemporaryDirectory() as temporary:
     loader_hook=loader[begin:loader.index('\n#endif',begin)+len('\n#endif')]
     assert loader.index('addr = kalloc_data(alloc_size, Z_WAITOK);') < loader.index('error = vn_rdwr(UIO_READ, vp, addr, (int)alloc_size') < begin < loader.index(' *  Scan through the commands') < loader.index('valid = cs_validate_range(vp,')
     (args.output/'production-loader-hook.c').write_text(loader_hook)
+
+def production_limit(name):
+    values=re.findall(r'^#define '+re.escape(name)+r' ([0-9]+)$',production,re.MULTILINE)
+    assert len(values)==1,(name,values)
+    return int(values[0])
+max_records=production_limit('CS_IOS27_TEXT_FIXUP_MAX')
+max_files=production_limit('CS_IOS27_TEXT_FILE_MAX')
 
 header=r'''#define _GNU_SOURCE
 #include <stdint.h>
@@ -153,6 +161,8 @@ int main(int argc,char**argv){
 '''
 manifest=json.loads((args.descriptors/'manifest.json').read_text())
 header=header.replace('#define PAGE_SIZE 4096u',f'#define PAGE_SIZE {args.page_size}u').replace('#define PAGE_MASK 4095u',f'#define PAGE_MASK {args.page_size-1}u')
+assert manifest['descriptor_count']<=max_records
+tests=tests.replace('131072cap',str(max_records)+'cap')
 tests=tests.replace('28208',str(manifest['descriptor_count'])).replace('cs_ios27_text_fixup_applied==1024','cs_ios27_text_fixup_applied==PAGE_SIZE/4')
 tests=tests.replace('child,ffe,00010203,04050607',f'child,{args.page_size-2:x},00010203,04050607')
 source=header+production+wrapper+tests;(args.output/'test.c').write_text(source)
@@ -165,5 +175,5 @@ for profile in (0,1):
     built=subprocess.run(command,capture_output=True,text=True);(args.output/f'build{profile}.log').write_text(built.stdout+built.stderr);built.check_returncode()
     result=subprocess.run([str(exe),str(args.descriptors/'text-fixups-ios27.bin'),str(flat)],capture_output=True,text=True);(args.output/f'run{profile}.log').write_text(result.stdout+result.stderr);result.check_returncode();assert f'PASS profile{profile}' in result.stdout
     results.append({'profile':profile,'compiler_command':command,'passed':True,'log_sha256':hashlib.sha256((args.output/f'run{profile}.log').read_bytes()).hexdigest()})
-report={'schema':'zeta-ios27-production-text-fixups-host-v1','results':results,'patch_sha256':hashlib.sha256(patch.read_bytes()).hexdigest(),'production_c_sha256':hashlib.sha256(production.encode()).hexdigest(),'real_vm_hook_extracted':True,'real_private_loader_hook_extracted':True,'page_size':args.page_size,'max_records':131072,'max_files':512,'actual_descriptor_count':manifest['descriptor_count'],'original_files_checked':len(manifest['files']),'asan_ubsan':True,'kernel_compilation':False,'phone_commands':False,'limits':['Exact production validator and real post-validation conditional over explicit host vnode/ADT/page/cache peers','Native VM lock/lifecycle and actual kernel object compilation remain separate gates']}
+report={'schema':'zeta-ios27-production-text-fixups-host-v1','results':results,'patch_sha256':hashlib.sha256(patch.read_bytes()).hexdigest(),'production_c_sha256':hashlib.sha256(production.encode()).hexdigest(),'real_vm_hook_extracted':True,'real_private_loader_hook_extracted':True,'page_size':args.page_size,'max_records':max_records,'max_files':max_files,'actual_descriptor_count':manifest['descriptor_count'],'original_files_checked':len(manifest['files']),'asan_ubsan':True,'kernel_compilation':False,'phone_commands':False,'limits':['Exact production validator and real post-validation conditional over explicit host vnode/ADT/page/cache peers','Native VM lock/lifecycle and actual kernel object compilation remain separate gates']}
 (args.output/'result.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report,indent=2))
