@@ -1,0 +1,16 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8157,7 +8157,12 @@
+ 	static const char extensions_source[] = "/private/var/ngpu/addons", extensions_point[] = "/System/Library/Extensions";
+ 	static const char daemons_source[] = "/private/var/ngpu/daemons", daemons_point[] = "/System/Library/LaunchDaemons";
+ 	native_gpu_addon_mount(p, scratch, 0x400, extensions_source, sizeof(extensions_source), extensions_point,
+-	    sizeof(extensions_point), "/System/Library/Extensions/AGXMetalG18P.bundle",
++	    sizeof(extensions_point),
++#if defined(XNU_IOS27_CRYPTEXES) && XNU_IOS27_CRYPTEXES
++	    "/System/Library/Extensions/AGXMetalG19P.bundle",
++#else
++	    "/System/Library/Extensions/AGXMetalG18P.bundle",
++#endif
+ 	    "/System/Library/Extensions/NativeAdrenoMetal.bundle/Info.plist", &native_gpu_addon_stage,
+ 	    &native_gpu_addon_status);
+ 	native_gpu_addon_mount(p, scratch, 0x600, daemons_source, sizeof(daemons_source), daemons_point, sizeof(daemons_point),
