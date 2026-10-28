@@ -113,8 +113,8 @@
 +#error XNU_IOS27_TEXT_FIXUPS must be0or1
 +#endif
 +#if XNU_IOS27_TEXT_FIXUPS
-+#define CS_IOS27_TEXT_FIXUP_MAX 32768
-+#define CS_IOS27_TEXT_FILE_MAX 64
++#define CS_IOS27_TEXT_FIXUP_MAX 65536
++#define CS_IOS27_TEXT_FILE_MAX 256
 +static struct cs_text_fixup cs_ios27_text_fixups[CS_IOS27_TEXT_FIXUP_MAX];
 +static struct { uint32_t first, end; } cs_ios27_text_files[CS_IOS27_TEXT_FILE_MAX];
 +static uint32_t cs_ios27_text_file_count;

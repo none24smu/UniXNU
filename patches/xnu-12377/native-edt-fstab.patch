@@ -24,7 +24,7 @@
  __startup_func
 --- a/bsd/vfs/vfs_subr.c
 +++ b/bsd/vfs/vfs_subr.c
-@@ -5342,6 +5342,181 @@ SYSCTL_INT(_vfs_generic, OID_AUTO, print_busy_vnodes,
+@@ -5342,6 +5342,215 @@ SYSCTL_INT(_vfs_generic, OID_AUTO, print_busy_vnodes,
      "VFS log busy vnodes blocking unmount");
  #endif
  
@@ -41,7 +41,9 @@
 + * tmpfs from the template in its options; the first read that returns one
 + * loads the prelinked tmpfs kext, as AppleBSDKextStarterTMPFS does on iOS
 + * (there is no kextd to load it on demand). The System role is the mounted
-+ * root. Other roles would need the APFS role lookup and are left out.
++ * root. Persistent Data is reported only when its separate APFS filesystem
++ * is already mounted at /private/var by the owner-Data handoff. This does not
++ * discover or mount arbitrary APFS role volumes.
 + */
 +struct edt_fstab {
 +	char            fs_spec[32];
@@ -58,6 +60,7 @@
 +/* dyld reads ten entries at most. */
 +#define EDT_FSTAB_MAX   10
 +#define EDT_ROLE_SYSTEM 1
++#define EDT_ROLE_DATA   64
 +#define EDT_TMPFS_KEXT  "com.apple.filesystems.tmpfs"
 +
 +static bool edt_fstab_tmpfs_loaded;
@@ -93,6 +96,35 @@
 +	}
 +	memcpy(&number, value, sizeof(number));
 +	return number;
++}
++
++/* Never describe the root's /private/var directory as a mounted Data volume. */
++static bool
++edt_fstab_mounted_data(struct edt_fstab *fs)
++{
++	vnode_t vp = NULLVP;
++	struct mount *mp;
++	struct vfsstatfs *stat;
++	bool found = false;
++
++	if (strcmp(fs->fs_file, "/private/var") != 0 || rootvnode == NULLVP ||
++	    vnode_lookup(fs->fs_file, 0, &vp, vfs_context_kernel()) != 0) {
++		return false;
++	}
++	mp = vnode_mount(vp);
++	if (mp != NULL && mp != vnode_mount(rootvnode) && (vp->v_flag & VROOT)) {
++		stat = vfs_statfs(mp);
++		if (strcmp(stat->f_fstypename, "apfs") == 0 &&
++		    strcmp(stat->f_mntonname, fs->fs_file) == 0 &&
++		    strncmp(stat->f_mntfromname, "/dev/", 5) == 0 && stat->f_mntfromname[5] != '\0' &&
++		    strnlen(stat->f_mntfromname, sizeof(fs->fs_spec)) < sizeof(fs->fs_spec)) {
++			strlcpy(fs->fs_spec, stat->f_mntfromname, sizeof(fs->fs_spec));
++			strlcpy(fs->fs_vfstype, stat->f_fstypename, sizeof(fs->fs_vfstype));
++			found = true;
++		}
++	}
++	vnode_put(vp);
++	return found;
 +}
 +
 +static int
@@ -145,6 +177,8 @@
 +
 +			strlcpy(fs->fs_spec, root->f_mntfromname, sizeof(fs->fs_spec));
 +			strlcpy(fs->fs_vfstype, root->f_fstypename, sizeof(fs->fs_vfstype));
++		} else if (fs->fs_role == EDT_ROLE_DATA && edt_fstab_mounted_data(fs)) {
++			/* The spec and filesystem type came from the actual mounted volume. */
 +		} else {
 +			printf("edt_fstab: %s: no volume for role %#x\n", fs->fs_file, fs->fs_role);
 +			bzero(fs, sizeof(*fs));
