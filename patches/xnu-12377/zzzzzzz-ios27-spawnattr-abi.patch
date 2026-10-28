@@ -1,0 +1,75 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -4350,6 +4350,47 @@
+  *		Handle posix_spawnattr_t
+  *		Handle posix_spawn_file_actions_t
+  */
++#if defined(XNU_IOS27_CRYPTEXES) && XNU_IOS27_CRYPTEXES
++/* iOS27 arm64 libsystem_kernel's 0x100-byte spawnattr keeps the prefix
++ * through launch_type, widens sec_flags and adds use_sanitizers. Its crash
++ * count/throttle pair is at 0xb4, and kqworkloop limits at 0xbc. xnu-12377
++ * expects those pairs at 0xac and 0xb4. Do not interpret throttle as a limit.
++ * Offsets are pinned by the exact IPSW setter instructions; legacy callers
++ * retain the original copy. No pointer extensions are taken from this copy. */
++static int
++native_ios27_spawnattr_copyin(user_addr_t source, user_size_t size, bool is64,
++    struct _posix_spawnattr *target)
++{
++	_Static_assert(offsetof(struct _posix_spawnattr, psa_ports) == 0xc0, "legacy spawn prefix");
++	_Static_assert(sizeof(struct _posix_spawnattr) == 0xf8, "legacy spawn attributes");
++	_Static_assert(offsetof(struct _posix_spawnattr, psa_sec_flags) == 0xaa, "legacy security flags");
++	_Static_assert(offsetof(struct _posix_spawnattr, psa_crash_count) == 0xac, "legacy crash pair");
++	_Static_assert(offsetof(struct _posix_spawnattr, psa_kqworkloop_soft_limit) == 0xb4, "legacy workloop pair");
++	_Static_assert(offsetof(struct _posix_spawnattr, psa_conclave_mem_limit) == 0xbc, "legacy conclave limit");
++	if (!is64 || size == sizeof(*target)) {
++		return copyin(source, target, offsetof(struct _posix_spawnattr, psa_ports));
++	}
++	if (size != 0x100) return EINVAL;
++	uint8_t wire[0xc8];
++	int error = copyin(source, wire, sizeof(wire));
++	if (error) return error;
++	uint32_t security = 0;
++	memcpy(&security, wire + 0xac, sizeof(security));
++	/* New security bits and sanitizer semantics need separate implementations;
++	 * fail explicitly instead of dropping requested policy. */
++	if (security > UINT16_MAX || wire[0xb0] != 0) return ENOTSUP;
++	bzero(target, offsetof(struct _posix_spawnattr, psa_ports));
++	memcpy(target, wire, 0xa9);
++	target->psa_sec_flags = (uint16_t)security;
++	memcpy(&target->psa_crash_count, wire + 0xb4, sizeof(uint32_t));
++	memcpy(&target->psa_throttle_timeout, wire + 0xb8, sizeof(uint32_t));
++	memcpy(&target->psa_kqworkloop_soft_limit, wire + 0xbc, sizeof(uint32_t));
++	memcpy(&target->psa_kqworkloop_hard_limit, wire + 0xc0, sizeof(uint32_t));
++	memcpy(&target->psa_conclave_mem_limit, wire + 0xc4, sizeof(uint32_t));
++	return 0;
++}
++#endif
++
+ int
+ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
+ {
+@@ -4376,7 +4417,7 @@
+ 	os_reason_t exec_failure_reason = NULL;
+ 
+ 	struct exec_port_actions port_actions = { };
+-	vm_size_t px_sa_offset = offsetof(struct _posix_spawnattr, psa_ports);
++	__unused vm_size_t px_sa_offset = offsetof(struct _posix_spawnattr, psa_ports);
+ 	task_t old_task = current_task();
+ 	task_t new_task = NULL;
+ 	boolean_t should_release_proc_ref = FALSE;
+@@ -4470,9 +4511,12 @@
+ 			 * This is a bit fragile: <rdar://problem/16427422>
+ 			 */
+ 
+-			if ((error = copyin(px_args.attrp, &px_sa, px_sa_offset)) != 0) {
+-				goto bad;
+-			}
++#if defined(XNU_IOS27_CRYPTEXES) && XNU_IOS27_CRYPTEXES
++			error = native_ios27_spawnattr_copyin(px_args.attrp, px_args.attr_size, is_64, &px_sa);
++#else
++			error = copyin(px_args.attrp, &px_sa, px_sa_offset);
++#endif
++			if (error != 0) goto bad;
+ 
+ 			imgp->ip_px_sa = &px_sa;
+ 		}
