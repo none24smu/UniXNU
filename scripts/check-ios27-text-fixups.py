@@ -163,6 +163,7 @@ manifest=json.loads((args.descriptors/'manifest.json').read_text())
 header=header.replace('#define PAGE_SIZE 4096u',f'#define PAGE_SIZE {args.page_size}u').replace('#define PAGE_MASK 4095u',f'#define PAGE_MASK {args.page_size-1}u')
 assert manifest['descriptor_count']<=max_records
 tests=tests.replace('131072cap',str(max_records)+'cap')
+tests=tests.replace('cs_ios27_text_fixup_lookup_steps-steps<=19','cs_ios27_text_fixup_lookup_steps-steps<='+str(max_records.bit_length()+1))
 tests=tests.replace('28208',str(manifest['descriptor_count'])).replace('cs_ios27_text_fixup_applied==1024','cs_ios27_text_fixup_applied==PAGE_SIZE/4')
 tests=tests.replace('child,ffe,00010203,04050607',f'child,{args.page_size-2:x},00010203,04050607')
 source=header+production+wrapper+tests;(args.output/'test.c').write_text(source)
